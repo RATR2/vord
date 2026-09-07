@@ -1,6 +1,7 @@
+// Kotlin support is built into AGP 9.0+ - no separate org.jetbrains.kotlin.android plugin needed
+// (that plugin is incompatible with AGP 9's DSL). See https://kotl.in/gradle/agp-built-in-kotlin.
 plugins {
     id("com.android.application")
-    id("org.jetbrains.kotlin.android")
 }
 
 android {
@@ -29,9 +30,5 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
-    }
-
-    kotlinOptions {
-        jvmTarget = "17"
     }
 }
