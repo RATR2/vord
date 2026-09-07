@@ -25,31 +25,15 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v5.0.2
 
-      # Detects a bot version-bump commit (avoids an infinite loop), and reads
-      # tags from the commit message's own "Tags:" section:
-      #   workflow          required for anything below to run at all
-      #   version="X.Y.Z"   bump to this version and cut a release build
-      # No "workflow" tag means the job does nothing beyond checkout, silently -
-      # opt-in only, same convention as nilum's build.yml.
+      # Reads a "version=" tag from the commit message's own line, and requires the "workflow"
+      # tag before doing anything at all - opt-in only, same convention as nilum's build.yml.
+      # Tags must each be their own line, not just a substring anywhere in the message; otherwise
+      # a commit that merely *talks about* "version" or "workflow" in prose (e.g. this very
+      # comment) would trigger itself by accident.
       - name: Classify commit
         id: classify
         run: |
-          # Tags must each be their own line, not just a substring anywhere in
-          # the message; otherwise a commit that merely *talks about* "version"
-          # or "workflow" in prose (e.g. this very comment) would trigger itself
-          # by accident.
           MSG=$(git log -1 --pretty=%B)
-
-          # Bot detection can't key off github.actor: bump-version.sh pushes with
-          # a real PAT (not the default GITHUB_TOKEN) so its commit actually
-          # retriggers a run, but that means GitHub attributes the push to the
-          # PAT's owner, not github-actions[bot]. Match bump-version.sh's exact
-          # commit *subject* instead.
-          SUBJECT=$(git log -1 --pretty=%s)
-          IS_BOT="false"
-          if echo "$SUBJECT" | grep -qxE 'chore: bump version to [0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)? \[ci-bump\]'; then
-            IS_BOT="true"
-          fi
 
           VERSION=""
           if echo "$MSG" | grep -qxE 'version="[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?"'; then
@@ -61,23 +45,22 @@ jobs:
             HAS_WORKFLOW="true"
           fi
 
-          echo "is_bot=$IS_BOT" >> "$GITHUB_OUTPUT"
           echo "requested_version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "has_workflow=$HAS_WORKFLOW" >> "$GITHUB_OUTPUT"
-          echo "sha=$(git rev-parse --short=7 HEAD)" >> "$GITHUB_OUTPUT"
-          echo "full_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
-      - name: Bump version
-        if: steps.classify.outputs.is_bot == 'false' && steps.classify.outputs.has_workflow == 'true' && steps.classify.outputs.requested_version != ''
-        env:
-          VORD_PUSH_TOKEN: ${{ secrets.VORD_PUSH_TOKEN }}
-        run: scripts/ci/bump-version.sh "${{ steps.classify.outputs.requested_version }}"
-
-      - name: Build and publish release
-        if: steps.classify.outputs.is_bot == 'true'
+      # Bump, build, and publish all happen in this one job run rather than the bump commit
+      # trying to retrigger a second run (which proved fragile: an unchanged version produces an
+      # empty commit that build.yml's own paths-ignore filter silently drops, and a shallow
+      # single-commit checkout can't push a provable fast-forward to main from a branch other
+      # than main). Building straight off this checkout also means the release always reflects
+      # exactly the commit that requested it, bump or no bump.
+      - name: Bump, build, and publish release
+        if: steps.classify.outputs.has_workflow == 'true' && steps.classify.outputs.requested_version != ''
         env:
           GH_TOKEN: ${{ github.token }}
+          VORD_PUSH_TOKEN: ${{ secrets.VORD_PUSH_TOKEN }}
         run: |
           source scripts/ci/lib.sh
+          scripts/ci/bump-version.sh "${{ steps.classify.outputs.requested_version }}"
           build_apk
-          publish_release "$(read_version)" "${{ steps.classify.outputs.full_sha }}"
+          publish_release "$(read_version)" "$(git rev-parse HEAD)"
