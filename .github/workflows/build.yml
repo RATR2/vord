@@ -1,0 +1,83 @@
+name: Build
+
+on:
+  push:
+    branches: ["**"]
+    paths-ignore:
+      - "**.md"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout vord
+        uses: actions/checkout@v7
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v5.0.2
+
+      # Detects a bot version-bump commit (avoids an infinite loop), and reads
+      # tags from the commit message's own "Tags:" section:
+      #   workflow          required for anything below to run at all
+      #   version="X.Y.Z"   bump to this version and cut a release build
+      # No "workflow" tag means the job does nothing beyond checkout, silently -
+      # opt-in only, same convention as nilum's build.yml.
+      - name: Classify commit
+        id: classify
+        run: |
+          # Tags must each be their own line, not just a substring anywhere in
+          # the message; otherwise a commit that merely *talks about* "version"
+          # or "workflow" in prose (e.g. this very comment) would trigger itself
+          # by accident.
+          MSG=$(git log -1 --pretty=%B)
+
+          # Bot detection can't key off github.actor: bump-version.sh pushes with
+          # a real PAT (not the default GITHUB_TOKEN) so its commit actually
+          # retriggers a run, but that means GitHub attributes the push to the
+          # PAT's owner, not github-actions[bot]. Match bump-version.sh's exact
+          # commit *subject* instead.
+          SUBJECT=$(git log -1 --pretty=%s)
+          IS_BOT="false"
+          if echo "$SUBJECT" | grep -qxE 'chore: bump version to [0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)? \[ci-bump\]'; then
+            IS_BOT="true"
+          fi
+
+          VERSION=""
+          if echo "$MSG" | grep -qxE 'version="[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?"'; then
+            VERSION=$(echo "$MSG" | grep -oxE 'version="[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?"' | head -1 | cut -d'"' -f2)
+          fi
+
+          HAS_WORKFLOW="false"
+          if echo "$MSG" | grep -qixE 'workflow'; then
+            HAS_WORKFLOW="true"
+          fi
+
+          echo "is_bot=$IS_BOT" >> "$GITHUB_OUTPUT"
+          echo "requested_version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "has_workflow=$HAS_WORKFLOW" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse --short=7 HEAD)" >> "$GITHUB_OUTPUT"
+          echo "full_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Bump version
+        if: steps.classify.outputs.is_bot == 'false' && steps.classify.outputs.has_workflow == 'true' && steps.classify.outputs.requested_version != ''
+        env:
+          VORD_PUSH_TOKEN: ${{ secrets.VORD_PUSH_TOKEN }}
+        run: scripts/ci/bump-version.sh "${{ steps.classify.outputs.requested_version }}"
+
+      - name: Build and publish release
+        if: steps.classify.outputs.is_bot == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          source scripts/ci/lib.sh
+          build_apk
+          publish_release "$(read_version)" "${{ steps.classify.outputs.full_sha }}"
