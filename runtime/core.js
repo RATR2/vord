@@ -119,4 +119,90 @@
       }
     }
   });
+
+  // ---- discovery: anything named like passkeys / WebAuthn ---------------------------------
+  var WANT = /passkey|webauthn|fido|credentialmanager|publickeycredential/i;
+  var found = 0;
+  vord.onModule(function (id, exp) {
+    if (!exp || found >= 80) return;
+    var targets = [exp, exp.default];
+    for (var t = 0; t < targets.length; t++) {
+      var o = targets[t];
+      if (!o || (typeof o !== 'object' && typeof o !== 'function')) continue;
+      var names;
+      try { names = Object.getOwnPropertyNames(o); } catch (e) { continue; }
+      var hits = [];
+      for (var i = 0; i < names.length && i < 400; i++) {
+        if (WANT.test(names[i])) hits.push(names[i]);
+      }
+      try { if (typeof o === 'function' && o.name && WANT.test(o.name)) hits.push('fn:' + o.name); } catch (e) {}
+      if (hits.length) {
+        found++;
+        log('PASSKEY? module ' + id + (t ? '.default' : '') + ': ' + hits.slice(0, 8).join(','));
+        for (var h = 0; h < hits.length && h < 4; h++) {
+          var member; try { member = o[hits[h]]; } catch (e) { continue; }
+          if (member && (typeof member === 'object' || typeof member === 'function')) {
+            log('   ' + hits[h] + ' is ' + typeof member + ' ctor=' + (member.constructor && member.constructor.name) +
+                ' members=' + keysOf(member));
+          }
+        }
+      }
+    }
+  });
+
+  // ---- native module discovery: which TurboModules does Discord ask for? ------------------
+  var asked = Object.create(null);
+  function noteModule(name) {
+    if (typeof name !== 'string' || asked[name]) return;
+    asked[name] = true;
+    log('turbo module requested: ' + name + (WANT.test(name) || /integrity|age/i.test(name) ? '  <== interesting' : ''));
+  }
+  // Wrap g[name] now if it exists, otherwise as soon as something assigns it.
+  function trapGlobal(name, wrapFn) {
+    var cur = g[name];
+    if (typeof cur === 'function' && !cur.__vord) {
+      g[name] = wrapFn(cur);
+      log(name + ' hooked (already present)');
+      return;
+    }
+    var val = cur;
+    Object.defineProperty(g, name, {
+      configurable: true, enumerable: true,
+      get: function () { return val; },
+      set: function (v) {
+        val = (typeof v === 'function' && !v.__vord) ? wrapFn(v) : v;
+        log(name + ' assigned and hooked: ' + typeof v);
+      }
+    });
+    log(name + ' not present yet (' + typeof cur + '), trap installed');
+  }
+  trapGlobal('__turboModuleProxy', function (real) {
+    var h = function (name) { noteModule(name); return real.apply(this, arguments); };
+    h.__vord = true;
+    return h;
+  });
+  log('globals now: nativeModuleProxy=' + typeof g.nativeModuleProxy + ' RN$Bridgeless=' +
+      typeof g['RN$Bridgeless'] + ' __fbBatchedBridge=' + typeof g.__fbBatchedBridge);
+
+  // RN's TurboModuleRegistry is a plain JS module: {get, getEnforcing}. Wrap both so every
+  // native module lookup is visible (and later blockable). nativeModuleProxy itself is read-only.
+  var registryDone = false;
+  vord.onModule(function (id, exp) {
+    if (registryDone || !exp) return;
+    var cands = [exp, exp.default];
+    for (var i = 0; i < cands.length; i++) {
+      var r = cands[i];
+      if (r && typeof r === 'object' && typeof r.get === 'function' &&
+          typeof r.getEnforcing === 'function' && Object.keys(r).length <= 4) {
+        registryDone = true;
+        var oget = r.get, oenf = r.getEnforcing;
+        try {
+          r.get = function (name) { noteModule(name); return oget.apply(this, arguments); };
+          r.getEnforcing = function (name) { noteModule(name); return oenf.apply(this, arguments); };
+          log('TurboModuleRegistry wrapped at module ' + id + (i ? '.default' : ''));
+        } catch (e) { log('registry wrap failed: ' + e); }
+        return;
+      }
+    }
+  });
 })(globalThis);
