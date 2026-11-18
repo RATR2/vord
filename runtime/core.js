@@ -120,6 +120,37 @@
     }
   });
 
+
+  // Log calls (name, args, return, caller stack) of a function property so we can see who uses it.
+  var traced = Object.create(null);
+  function brief(v) {
+    if (v === null || v === undefined) return String(v);
+    var t = typeof v;
+    if (t === 'string') return JSON.stringify(v.length > 30 ? v.slice(0, 30) + '..' : v);
+    if (t === 'number' || t === 'boolean') return String(v);
+    if (t === 'function') return 'fn';
+    if (v && typeof v.then === 'function') return 'promise';
+    return t === 'object' ? (Array.isArray(v) ? 'array(' + v.length + ')' : '{' + Object.keys(v).slice(0, 5).join(',') + '}') : t;
+  }
+  function trace(id, obj, name) {
+    var key = id + '.' + name;
+    if (traced[key]) return;
+    traced[key] = 0;
+    var orig = obj[name];
+    obj[name] = function () {
+      var n = ++traced[key];
+      var args = [];
+      for (var i = 0; i < arguments.length && i < 4; i++) args.push(brief(arguments[i]));
+      var res = orig.apply(this, arguments);
+      if (n <= 3) {
+        var stack = '';
+        try { stack = String(new Error().stack).split('\n').slice(2, 7).map(function (l) { return l.trim().replace(/\(.*\)/, ''); }).join(' < '); } catch (e) {}
+        log('CALL ' + key + '(' + args.join(', ') + ') -> ' + brief(res) + '  stack: ' + stack);
+      }
+      return res;
+    };
+  }
+
   // ---- discovery: anything named like passkeys / WebAuthn ---------------------------------
   var WANT = /passkey|webauthn|fido|credentialmanager|publickeycredential/i;
   var found = 0;
@@ -139,6 +170,10 @@
       if (hits.length) {
         found++;
         log('PASSKEY? module ' + id + (t ? '.default' : '') + ': ' + hits.slice(0, 8).join(','));
+        for (var th = 0; th < hits.length; th++) {
+          if (hits[th].indexOf('fn:') === 0) continue;
+          try { if (typeof o[hits[th]] === 'function') trace(id, o, hits[th]); } catch (e) {}
+        }
         for (var h = 0; h < hits.length && h < 4; h++) {
           var member; try { member = o[hits[h]]; } catch (e) { continue; }
           if (member && (typeof member === 'object' || typeof member === 'function')) {
@@ -197,8 +232,8 @@
         registryDone = true;
         var oget = r.get, oenf = r.getEnforcing;
         try {
-          r.get = function (name) { noteModule(name); return oget.apply(this, arguments); };
-          r.getEnforcing = function (name) { noteModule(name); return oenf.apply(this, arguments); };
+          r.get = function (name) { noteModule(name + ' [get]'); return oget.apply(this, arguments); };
+          r.getEnforcing = function (name) { noteModule(name + ' [getEnforcing]'); return oenf.apply(this, arguments); };
           log('TurboModuleRegistry wrapped at module ' + id + (i ? '.default' : ''));
         } catch (e) { log('registry wrap failed: ' + e); }
         return;

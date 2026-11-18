@@ -39,6 +39,7 @@ public final class Loader extends AppComponentFactory {
 
     @Override
     public ClassLoader instantiateClassLoader(ClassLoader cl, ApplicationInfo aInfo) {
+        Profiles.runPending(aInfo);
         return delegate != null ? delegate.instantiateClassLoader(cl, aInfo)
                 : super.instantiateClassLoader(cl, aInfo);
     }
