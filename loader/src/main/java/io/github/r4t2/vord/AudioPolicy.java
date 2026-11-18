@@ -90,7 +90,9 @@ final class AudioPolicy {
     private static void enforce(Application app, AudioManager am, AudioDeviceInfo device) {
         try {
             String mode = mode(app);
-            if (device == null || mode.equals("off")) return;
+            // media: clear pins that land on headset-type devices; test-all: clear every pin;
+            // headset / off: leave Discord's and the chooser's pins alone.
+            if (device == null || !(mode.equals("media") || mode.equals("test-all"))) return;
             if (mode.equals("media") && !isHeadset(device.getType())) return;
             Log.i(TAG, "audio policy: clearing communication device type=" + device.getType()
                     + " (" + device.getProductName() + "), mode=" + mode);

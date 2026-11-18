@@ -11,6 +11,9 @@
     try { if (typeof nlh === 'function') nlh('[Vord] ' + msg, 1); } catch (e) {}
   }
   if (g.__vord) { log('core already loaded'); return; }
+  // Discovery/tracing tools are expensive (they run for every element and module); off by default.
+  // Enable with a file <externalFilesDir>/vord/debug (checked by the Loader via the override path).
+  var DEBUG = false;
 
   var vord = g.__vord = {
     version: '0.0.1-m2',
@@ -155,7 +158,7 @@
   var WANT = /passkey|webauthn|fido|credentialmanager|publickeycredential/i;
   var found = 0;
   vord.onModule(function (id, exp) {
-    if (!exp || found >= 80) return;
+    if (!DEBUG || !exp || found >= 80) return;
     var targets = [exp, exp.default];
     for (var t = 0; t < targets.length; t++) {
       var o = targets[t];
@@ -384,15 +387,19 @@
   var UI_WANT = /passkey|webauthn|securitykey|fido/i;
   var seenUi = Object.create(null);
   var elementCount = 0;
+  var nameCache = typeof Map === 'function' ? new Map() : null; // type -> name; runs per element, keep it cheap
   function typeName(t) {
+    if (!t || typeof t === 'string') return '';
+    if (nameCache) { var hit = nameCache.get(t); if (hit !== undefined) return hit; }
+    var n = '';
     try {
-      if (!t) return '';
-      if (typeof t === 'string') return '';
-      var n = t.displayName || t.name;
+      n = t.displayName || t.name;
       if (!n && t.type) n = t.type.displayName || t.type.name;     // React.memo
       if (!n && t.render) n = t.render.displayName || t.render.name; // forwardRef
-      return n || '';
-    } catch (e) { return ''; }
+    } catch (e) { n = ''; }
+    n = n || '';
+    if (nameCache) nameCache.set(t, n);
+    return n;
   }
   var dumpUntil = 0, dumpBudget = 0;
   var TEXT_WANT = /passkey|security key|pass key|webauthn|change audio|audio output|audio input/i;
@@ -416,11 +423,12 @@
     elementCount++;
     if (elementCount === 1 || elementCount === 500 || elementCount === 5000) log('elements created: ' + elementCount);
     var n = typeName(type);
-    if (n && UI_WANT.test(n) && !seenUi[n]) {
+    if (n === 'TableRadioGroup' || n === 'TableRadioRow') captureUi(n, type);
+    if (DEBUG && n && UI_WANT.test(n) && !seenUi[n]) {
       seenUi[n] = true;
       log('UI element: ' + n);
     }
-    scanProps(n, props);
+    if (DEBUG) scanProps(n, props);
     return n;
   }
   // plugin noPasskeys, UI half: the sign-in option is a button whose text is "Log in with Passkey".
@@ -503,9 +511,9 @@
         if (typeName(type) && fr[0] !== 'w') {}
         log('UI+ <' + (typeName(type) || (typeof type === 'string' ? type : '?')) + tv + '> props=' + pk + ' by ' + fr.slice(0, 3).join(' < '));
       }
-      scanOr(type, props);
+      if (DEBUG) scanOr(type, props);
       var name = typeName(type);
-      if (name === 'VoicePanelAudioPhoneOutputSection' && typeof type === 'function' && vord.ui && vord.React && audioCache && !vord._chooserBroken) {
+      if (name === 'VoicePanelAudioPhoneOutputSection' && typeof type === 'function' && uiReady() && vord.React && audioCache && !vord._chooserBroken) {
         var ca = Array.prototype.slice.call(arguments);
         ca[0] = chooserFor(type);
         return orig.apply(this, ca);
@@ -693,7 +701,7 @@
         var id = g.setInterval(poll, 2500);
         return function () { alive = false; g.clearInterval(id); g.clearTimeout(t1); };
       }, []);
-      if (!state || !ui || !state.devices) return R.createElement(orig, props);
+      if (!state || !uiReady() || !state.devices) return R.createElement(orig, props);
       var m = buildModel(state);
       if (!vord._chooserDiag) {
         vord._chooserDiag = true;
@@ -722,17 +730,29 @@
     chooserTypes.push({ orig: orig, comp: comp });
     return comp;
   }
-  // find the design-system components by export name
-  vord.ui = null;
+  // Design-system components: only trust something whose function name really is the component's
+  // (an i18n strings module also has keys called TableRadioGroup, holding message getters).
+  vord.ui = {};
+  function uiReady() { return !!(vord.ui && vord.ui.TableRadioGroup && vord.ui.TableRadioRow); }
+  function captureUi(name, type) {
+    if ((name === 'TableRadioGroup' || name === 'TableRadioRow') && (typeof type === 'function' || typeof type === 'object') && type && !vord.ui[name]) {
+      vord.ui[name] = type;
+      log('audioChooser: captured ' + name + ' from a rendered element');
+    }
+  }
   vord.onModule(function (id, exp) {
-    if (vord.ui || !exp) return;
+    if (!DEBUG || uiReady() || !exp) return;
     var cands = [exp, exp.default];
     for (var i = 0; i < cands.length; i++) {
       var o = cands[i];
       if (o && typeof o === 'object') {
         var a, b;
         try { a = o.TableRadioGroup; b = o.TableRadioRow; } catch (e) { continue; }
-        if (a && b) { vord.ui = { TableRadioGroup: a, TableRadioRow: b }; log('audioChooser: design components found in module ' + id); return; }
+        if (a && b && typeName(a) === 'TableRadioGroup' && typeName(b) === 'TableRadioRow') {
+          vord.ui.TableRadioGroup = a; vord.ui.TableRadioRow = b;
+          log('audioChooser: design components found in module ' + id);
+          return;
+        }
       }
     }
   });
