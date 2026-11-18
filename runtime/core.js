@@ -513,7 +513,7 @@
       }
       if (DEBUG) scanOr(type, props);
       var name = typeName(type);
-      if (name === 'VoicePanelAudioPhoneOutputSection' && typeof type === 'function' && uiReady() && vord.React && audioCache && !vord._chooserBroken) {
+      if (name === 'VoicePanelAudioPhoneOutputSection' && typeof type === 'function' && vord.React && !vord._chooserBroken) {
         var ca = Array.prototype.slice.call(arguments);
         ca[0] = chooserFor(type);
         return orig.apply(this, ca);
@@ -685,6 +685,7 @@
     return Boundary;
   }
   var chooserPoll = null;
+  var chooserReadyShown = false;
   var chooserTypes = [];
   function chooserFor(orig) {
     for (var i = 0; i < chooserTypes.length; i++) if (chooserTypes[i].orig === orig) return chooserTypes[i].comp;
@@ -695,6 +696,8 @@
       var state = st[0], setState = st[1];
       var pd = useState(null);
       var pending = pd[0], setPending = pd[1];
+      var tk = useState(0);
+      var setTick = tk[1];
       useEffect(function () {
         var alive = true;
         function poll() { readAudioState().then(function (s) { if (alive && s) setState(s); }); }
@@ -702,7 +705,17 @@
         if (!FILES) writeVordFile('.touch', '1');
         poll();
         var t1 = g.setTimeout(poll, 700);
-        var id = g.setInterval(poll, 2500);
+        var n = 0;
+        // Until the data and Discord's row components are there, check often and show Discord's own
+        // list meanwhile; afterwards refresh every ~2.4 s.
+        var id = g.setInterval(function () {
+          if (!alive) return;
+          n++;
+          if (!audioCache) poll();
+          if (!uiReady() || !audioCache) setTick(function (x) { return x + 1; });
+          else if (n % 8 === 0) poll();
+          else if (n === 1 || !chooserReadyShown) { chooserReadyShown = true; setTick(function (x) { return x + 1; }); }
+        }, 300);
         return function () { alive = false; chooserPoll = null; g.clearInterval(id); g.clearTimeout(t1); };
       }, []);
       if (!state || !uiReady() || !state.devices) return R.createElement(orig, props);

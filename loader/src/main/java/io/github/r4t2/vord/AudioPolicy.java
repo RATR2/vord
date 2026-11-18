@@ -79,6 +79,12 @@ final class AudioPolicy {
                     writeState(app, am);
                 }
             }, main);
+            // Pins die with the process, so the saved mode must not outlive them: default routing again.
+            try (FileOutputStream out = new FileOutputStream(new File(vordDir(app), "audio.mode"))) {
+                out.write("media".getBytes(StandardCharsets.UTF_8));
+            } catch (IOException ignored) {
+                // keeps the previous mode, harmless
+            }
             writeState(app, am);
             watchCommands(app, am);
             Log.i(TAG, "audio policy started, mode=" + mode(app));
