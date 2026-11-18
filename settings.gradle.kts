@@ -16,3 +16,5 @@ dependencyResolutionManagement {
 rootProject.name = "vord"
 
 include("manager")
+include("patcher")
+include("loader")

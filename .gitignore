@@ -6,3 +6,7 @@ local.properties
 .idea/
 .DS_Store
 keystore.jks
+
+# local test keystores and patch output
+*.p12
+/out/
