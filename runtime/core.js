@@ -499,8 +499,10 @@
     try { orig.__vordHideable = W; } catch (e) {}
     return W;
   }
+  var rawCreateElement = null; // React.createElement before our hook: the hook would swap the sheet section for the chooser again (endless recursion)
   function wrapElementFn(owner, key) {
     var orig = owner[key];
+    if (key === 'createElement' && typeof orig === 'function' && !orig.__vordEl) rawCreateElement = orig;
     if (typeof orig !== 'function' || orig.__vordEl) return false;
     var w = function (type, props) {
       onElement(type, props);
@@ -683,7 +685,7 @@
       vord._chooserBroken = true;
     };
     Boundary.prototype.render = function () {
-      if (this.state.failed) return R.createElement(this.props.orig, this.props.props);
+      if (this.state.failed) return (rawCreateElement || R.createElement)(this.props.orig, this.props.props);
       return this.props.children;
     };
     boundaryClass = Boundary;
@@ -723,7 +725,7 @@
         }, 300);
         return function () { alive = false; chooserPoll = null; g.clearInterval(id); g.clearTimeout(t1); };
       }, []);
-      if (!state || !uiReady() || !state.devices) return R.createElement(orig, props);
+      if (!state || !uiReady() || !state.devices) return (rawCreateElement || R.createElement)(orig, props);
       var m = buildModel(state);
       if (!vord._chooserDiag) {
         vord._chooserDiag = true;
