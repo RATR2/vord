@@ -255,6 +255,27 @@
             return out;
           };
         }
+        if (typeof v === 'function' && spec.cbTrace && spec.cbTrace.indexOf(prop) >= 0) {
+          return function () {
+            var key = name + '.' + prop;
+            var args = Array.prototype.slice.call(arguments);
+            for (var ci = 0; ci < args.length; ci++) {
+              if (typeof args[ci] === 'function') {
+                (function (cb) {
+                  args[ci] = function () {
+                    var out = Array.prototype.map.call(arguments, function (a) {
+                      try { var j = JSON.stringify(a); return j.length > 900 ? j.slice(0, 900) + '..' : j; } catch (e) { return String(a); }
+                    }).join(' | ');
+                    log('  ' + key + ' callback: ' + out);
+                    return cb.apply(this, arguments);
+                  };
+                })(args[ci]);
+              }
+            }
+            log('native ' + key + '(...) called');
+            return v.apply(target, args);
+          };
+        }
         if (typeof v === 'function' && (all || tr.indexOf(prop) >= 0)) {
           return function () {
             var key = name + '.' + prop;
@@ -305,7 +326,7 @@
     }
   };
   nativeSpecs['NativePlayAgeSignalsModule'] = { trace: ['*'] };
-  nativeSpecs['NativeMediaEngineModule'] = { trace: ['setInputDevice', 'setOutputDevice', 'setInputDeviceById', 'setOutputDeviceById', 'getInputDevices', 'getOutputDevices', 'getAudioSubsystem', 'setAVAudioSessionMode', 'setAudioInputEnabled', 'createVoiceConnectionWithOptions', 'setHasFullbandPerformance'] };
+  nativeSpecs['NativeMediaEngineModule'] = { cbTrace: ['getInputDevices', 'getOutputDevices', 'getAudioSubsystem'], trace: ['setInputDevice', 'setOutputDevice', 'setInputDeviceById', 'setOutputDeviceById', 'getInputDevices', 'getOutputDevices', 'setAVAudioSessionMode', 'setAudioInputEnabled', 'createVoiceConnectionWithOptions', 'setHasFullbandPerformance'] };
 
   // RN's TurboModuleRegistry is a plain JS module: {get, getEnforcing}. Wrap both so every
   // native module lookup is visible (and later blockable). nativeModuleProxy itself is read-only.
@@ -371,7 +392,7 @@
       return n || '';
     } catch (e) { return ''; }
   }
-  var TEXT_WANT = /passkey|security key|pass key|webauthn/i;
+  var TEXT_WANT = /passkey|security key|pass key|webauthn|change audio|audio output|audio input/i;
   var seenText = Object.create(null);
   function scanProps(n, props) {
     if (!props || typeof props !== 'object') return;
@@ -383,7 +404,7 @@
       var str = typeof v === 'string' ? v : (Array.isArray(v) && v.length === 1 && typeof v[0] === 'string' ? v[0] : null);
       if (str && str.length < 120 && TEXT_WANT.test(str)) {
         var k = n + '|' + keys[i] + '|' + str;
-        if (!seenText[k]) { seenText[k] = true; log('UI text: <' + (n || '?') + ' ' + keys[i] + '="' + str + '">'); }
+        if (!seenText[k]) { seenText[k] = true; log('UI text: <' + (n || '?') + ' ' + keys[i] + '="' + str + '">' + (/audio/i.test(str) ? '  props=' + Object.keys(props).join(',') + '  stack: ' + stackTop(12) : '')); }
       }
     }
   }
