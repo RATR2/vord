@@ -15,7 +15,7 @@
   // Enable with a file <externalFilesDir>/vord/debug (checked by the Loader via the override path).
   var DEBUG = false;
   // Feature switches (for bisecting problems on a device).
-  var FEATURES = { proximityNever: true, proximityGuard: true, commOverride: true, chooser: true, noPasskeys: true, integrity: true, audioTrace: true };
+  var FEATURES = { noPasskeys: true, integrity: true, commOverride: true, chooser: true, proximityGuard: true, proximityNever: true };
 
   var vord = g.__vord = {
     version: '0.0.1-m2',
@@ -355,13 +355,15 @@
     e.code = 'E_VORD_INTEGRITY_UNAVAILABLE';
     return Promise.reject(e);
   }
-  nativeSpecs['NativePlayIntegrityModule'] = {
-    trace: ['*'],
-    override: {
-      prepareIntegrityToken: integrityUnavailable,
-      requestIntegrityToken: integrityUnavailable
-    }
-  };
+  if (FEATURES.integrity) {
+    nativeSpecs['NativePlayIntegrityModule'] = {
+      trace: ['*'],
+      override: {
+        prepareIntegrityToken: integrityUnavailable,
+        requestIntegrityToken: integrityUnavailable
+      }
+    };
+  }
   nativeSpecs['NativePlayAgeSignalsModule'] = { trace: ['*'] };
   // (NativeMediaEngineModule is deliberately NOT wrapped: it is called constantly during a call.)
 
@@ -393,7 +395,7 @@
   // Discord gates the option with hasAndroidPasskeySupport (module found by name, not by id).
   var noPasskeysCount = 0;
   vord.onModule(function (id, exp) {
-    if (noPasskeysCount >= 60 || !exp) return;
+    if (!FEATURES.noPasskeys || noPasskeysCount >= 60 || !exp) return;
     var m = [exp, exp.default];
     for (var i = 0; i < m.length; i++) {
       var o = m[i];
@@ -552,16 +554,16 @@
       }
       if (DEBUG) scanOr(type, props);
       var name = typeName(type);
-      if (name === 'VoicePanelAudioPhoneOutputSection' && typeof type === 'function' && vord.React && !vord._chooserBroken) {
+      if (FEATURES.chooser && name === 'VoicePanelAudioPhoneOutputSection' && typeof type === 'function' && vord.React && !vord._chooserBroken) {
         var ca = Array.prototype.slice.call(arguments);
         ca[0] = chooserFor(type);
         return orig.apply(this, ca);
       }
-      if (hideElement(type, props, arguments)) {
+      if (FEATURES.noPasskeys && hideElement(type, props, arguments)) {
         passkeyHiddenEver = true;
         return null;
       }
-      if (name === 'OrSeparator' && typeof type === 'function' && arguments.length <= 3) {
+      if (FEATURES.noPasskeys && name === 'OrSeparator' && typeof type === 'function' && arguments.length <= 3) {
         // The login screen draws one "or" divider just for the passkey button. Created by Login and
         // rendered later (after Login's render already hid the button), so decide at render time.
         var frames = stackFrames(5);
