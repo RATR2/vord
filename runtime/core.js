@@ -684,6 +684,7 @@
     boundaryClass = Boundary;
     return Boundary;
   }
+  var chooserPoll = null;
   var chooserTypes = [];
   function chooserFor(orig) {
     for (var i = 0; i < chooserTypes.length; i++) if (chooserTypes[i].orig === orig) return chooserTypes[i].comp;
@@ -692,14 +693,17 @@
       var useState = R.useState, useEffect = R.useEffect;
       var st = useState(audioCache);
       var state = st[0], setState = st[1];
+      var pd = useState(null);
+      var pending = pd[0], setPending = pd[1];
       useEffect(function () {
         var alive = true;
         function poll() { readAudioState().then(function (s) { if (alive && s) setState(s); }); }
+        chooserPoll = poll;
         if (!FILES) writeVordFile('.touch', '1');
         poll();
         var t1 = g.setTimeout(poll, 700);
         var id = g.setInterval(poll, 2500);
-        return function () { alive = false; g.clearInterval(id); g.clearTimeout(t1); };
+        return function () { alive = false; chooserPoll = null; g.clearInterval(id); g.clearTimeout(t1); };
       }, []);
       if (!state || !uiReady() || !state.devices) return R.createElement(orig, props);
       var m = buildModel(state);
@@ -712,6 +716,20 @@
       function choose(list, v, isMic) {
         var item = list.filter(function (x) { return x.value === v; })[0];
         if (!item) return;
+        // Show the choice at once; the real state (read back from Android) replaces it shortly after.
+        var wantsHeadset = /^comm:/.test(v) && list.some(function (x) { return x.value === v && /call quality/.test(x.sub); });
+        var optOut = m.outSel, optMic = m.micSel;
+        if (isMic) {
+          if (v === 'phone') { optMic = 'phone'; if (/^comm:/.test(m.outSel) && m.comm && m.comm.kind !== 'earpiece' && m.comm.kind !== 'speaker' && m.firstMedia) optOut = m.firstMedia.value; }
+          else { optMic = v; optOut = v; }
+        } else {
+          optOut = v;
+          optMic = wantsHeadset ? v : 'phone';
+        }
+        setPending({ out: optOut, mic: optMic });
+        g.setTimeout(function () { if (chooserPoll) chooserPoll(); }, 150);
+        g.setTimeout(function () { if (chooserPoll) chooserPoll(); }, 500);
+        g.setTimeout(function () { if (chooserPoll) chooserPoll(); setPending(null); }, 1400);
         var cmd = item.cmd;
         if (isMic && v === 'phone') {
           // phone microphone: leave a headset's call profile and use default routing again
@@ -723,9 +741,11 @@
       function rows(list) {
         return list.map(function (x) { return R.createElement(ui.TableRadioRow, { key: x.value, value: x.value, label: x.label, subLabel: x.sub }); });
       }
+      var shownOut = pending ? pending.out : m.outSel;
+      var shownMic = pending ? pending.mic : m.micSel;
       return R.createElement(boundaryFor(R), { orig: orig, props: props }, R.createElement(R.Fragment, null,
-        R.createElement(ui.TableRadioGroup, { title: 'Output', value: m.outSel, onChange: function (v) { choose(m.outs, v, false); }, hasIcons: false }, rows(m.outs)),
-        R.createElement(ui.TableRadioGroup, { title: 'Microphone', value: m.micSel, onChange: function (v) { choose(m.mics, v, true); }, hasIcons: false }, rows(m.mics))));
+        R.createElement(ui.TableRadioGroup, { title: 'Output', value: shownOut, onChange: function (v) { choose(m.outs, v, false); }, hasIcons: false }, rows(m.outs)),
+        R.createElement(ui.TableRadioGroup, { title: 'Microphone', value: shownMic, onChange: function (v) { choose(m.mics, v, true); }, hasIcons: false }, rows(m.mics))));
     };
     chooserTypes.push({ orig: orig, comp: comp });
     return comp;
