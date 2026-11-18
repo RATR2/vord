@@ -240,4 +240,121 @@
       }
     }
   });
+
+  // ---- plugin: noPasskeys ------------------------------------------------------------------
+  // Passkeys / RP ID sign-in cannot work on the renamed package, so report "no passkey support".
+  // Discord gates the option with hasAndroidPasskeySupport (module found by name, not by id).
+  var noPasskeysCount = 0;
+  vord.onModule(function (id, exp) {
+    if (noPasskeysCount >= 60 || !exp) return;
+    var m = [exp, exp.default];
+    for (var i = 0; i < m.length; i++) {
+      var o = m[i];
+      if (o && typeof o === 'object' && typeof o.hasAndroidPasskeySupport === 'function') {
+        if (o.hasAndroidPasskeySupport.__vordNoPasskeys) continue;
+        noPasskeysCount++;
+        var orig = o.hasAndroidPasskeySupport;
+        var logged = 0;
+        try {
+          o.hasAndroidPasskeySupport = function () {
+            var r = orig.apply(this, arguments);
+            var isPromise = r && typeof r.then === 'function';
+            if (logged++ < 5) log('noPasskeys: hasAndroidPasskeySupport() was ' + (isPromise ? 'a promise' : String(r)) + ' -> false');
+            return isPromise ? r.then(function () { return false; }) : false;
+          };
+          o.hasAndroidPasskeySupport.__vordNoPasskeys = true;
+          log('noPasskeys: patched module ' + id + (i ? '.default' : '') + ' plain=' + (Object.getPrototypeOf(o) === Object.prototype));
+        } catch (e) { log('noPasskeys: patch failed: ' + e); }
+      }
+    }
+  });
+
+  // ---- React element watcher: find UI components by (surviving) function name ---------------
+  var UI_WANT = /passkey|webauthn|securitykey|fido/i;
+  var seenUi = Object.create(null);
+  var elementCount = 0;
+  function typeName(t) {
+    try {
+      if (!t) return '';
+      if (typeof t === 'string') return '';
+      var n = t.displayName || t.name;
+      if (!n && t.type) n = t.type.displayName || t.type.name;     // React.memo
+      if (!n && t.render) n = t.render.displayName || t.render.name; // forwardRef
+      return n || '';
+    } catch (e) { return ''; }
+  }
+  var TEXT_WANT = /passkey|security key|pass key|webauthn/i;
+  var seenText = Object.create(null);
+  function scanProps(n, props) {
+    if (!props || typeof props !== 'object') return;
+    var keys;
+    try { keys = Object.keys(props); } catch (e) { return; }
+    for (var i = 0; i < keys.length && i < 30; i++) {
+      var v;
+      try { v = props[keys[i]]; } catch (e) { continue; }
+      var str = typeof v === 'string' ? v : (Array.isArray(v) && v.length === 1 && typeof v[0] === 'string' ? v[0] : null);
+      if (str && str.length < 120 && TEXT_WANT.test(str)) {
+        var k = n + '|' + keys[i] + '|' + str;
+        if (!seenText[k]) { seenText[k] = true; log('UI text: <' + (n || '?') + ' ' + keys[i] + '="' + str + '">'); }
+      }
+    }
+  }
+  function onElement(type, props) {
+    elementCount++;
+    if (elementCount === 1 || elementCount === 500 || elementCount === 5000) log('elements created: ' + elementCount);
+    var n = typeName(type);
+    if (n && UI_WANT.test(n) && !seenUi[n]) {
+      seenUi[n] = true;
+      log('UI element: ' + n);
+    }
+    scanProps(n, props);
+    return n;
+  }
+  // plugin noPasskeys, UI half: the sign-in option is a button whose text is "Log in with Passkey".
+  // Elements carrying that text (as text/label/title/children) are not created at all.
+  var HIDE_TEXT = /^\s*log in with (a )?passkey\s*$/i;
+  var hidden = Object.create(null);
+  function hideElement(type, props, args) {
+    var hit = null;
+    if (props && typeof props === 'object') {
+      var fields = ['text', 'label', 'title', 'accessibilityLabel', 'children'];
+      for (var i = 0; i < fields.length; i++) {
+        var v = props[fields[i]];
+        if (Array.isArray(v) && v.length === 1) v = v[0];
+        if (typeof v === 'string' && HIDE_TEXT.test(v)) { hit = fields[i]; break; }
+      }
+    }
+    if (!hit && args.length > 2 && typeof args[2] === 'string' && HIDE_TEXT.test(args[2])) hit = 'child';
+    if (!hit) return false;
+    var n = typeName(type) || '?';
+    if (!hidden[n]) { hidden[n] = true; log('noPasskeys: hid <' + n + ' ' + hit + '>'); }
+    return true;
+  }
+  function wrapElementFn(owner, key) {
+    var orig = owner[key];
+    if (typeof orig !== 'function' || orig.__vordEl) return false;
+    var w = function (type, props) {
+      onElement(type, props);
+      if (hideElement(type, props, arguments)) return null;
+      return orig.apply(this, arguments);
+    };
+    w.__vordEl = true;
+    owner[key] = w;
+    return true;
+  }
+  var jsxDone = false, createDone = false;
+  vord.onModule(function (id, exp) {
+    if (!exp || (jsxDone && createDone)) return;
+    var cands = [exp, exp.default];
+    for (var i = 0; i < cands.length; i++) {
+      var o = cands[i];
+      if (!o || typeof o !== 'object') continue;
+      if (!jsxDone && typeof o.jsx === 'function' && typeof o.jsxs === 'function' && typeof o.Fragment !== 'undefined') {
+        try { wrapElementFn(o, 'jsx'); wrapElementFn(o, 'jsxs'); jsxDone = true; log('jsx runtime hooked at module ' + id); } catch (e) { log('jsx hook failed: ' + e); }
+      }
+      if (!createDone && typeof o.createElement === 'function' && typeof o.useState === 'function') {
+        try { wrapElementFn(o, 'createElement'); createDone = true; log('React.createElement hooked at module ' + id); } catch (e) { log('createElement hook failed: ' + e); }
+      }
+    }
+  });
 })(globalThis);
