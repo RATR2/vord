@@ -15,7 +15,7 @@
   // Enable with a file <externalFilesDir>/vord/debug (checked by the Loader via the override path).
   var DEBUG = false;
   // Feature switches (for bisecting problems on a device).
-  var FEATURES = { proximityGuard: true, commOverride: true, chooser: true, noPasskeys: true, integrity: true, audioTrace: true };
+  var FEATURES = { proximityNever: true, proximityGuard: true, commOverride: true, chooser: true, noPasskeys: true, integrity: true, audioTrace: true };
 
   var vord = g.__vord = {
     version: '0.0.1-m2',
@@ -311,6 +311,7 @@
   // the pinned output; headphones, speaker and default routing never blank the screen.
   var proximityWanted = false;
   function earpiecePinned() {
+    if (FEATURES.proximityNever) return false; // the screen never blanks from the proximity sensor
     var st = audioCache;
     if (!st || st.pinned === null || st.pinned === undefined) return false;
     var d = (st.devices || []).filter(function (x) { return x.id === st.pinned; })[0];
@@ -663,8 +664,8 @@
     var commDevs = devs.filter(function (d) { return d.comm; });
     function find(kind) { return commDevs.filter(function (d) { return d.kind === kind; })[0]; }
     var ear = find('earpiece'), spk = find('speaker');
-    if (ear) outs.push({ value: 'comm:' + ear.id, label: 'Phone earpiece', sub: 'Phone', cmd: ['mode media', 'pin ' + ear.id] });
-    if (spk) outs.push({ value: 'comm:' + spk.id, label: 'Phone speaker', sub: 'Phone', cmd: ['mode media', 'pin ' + spk.id] });
+    if (ear) outs.push({ value: 'comm:' + ear.id, label: 'Phone earpiece', sub: 'The small top speaker, for holding the phone to your ear', cmd: ['mode media', 'pin ' + ear.id] });
+    if (spk) outs.push({ value: 'comm:' + spk.id, label: 'Phone speaker', sub: 'The loudspeaker', cmd: ['mode media', 'pin ' + spk.id] });
     var seenMedia = {};
     var firstMedia = null;
     devs.forEach(function (d) {
