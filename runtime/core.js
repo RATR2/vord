@@ -279,7 +279,16 @@
   // Phase 1 (observe): what do voice calls and age assurance do natively?
   nativeSpecs['NativeTelecomModule'] = { trace: ['*'] };
   nativeSpecs['NativeSystemTelecomModule'] = { trace: ['*'] };
-  nativeSpecs['NativeAudioManagerModule'] = { trace: ['*'] };
+  // Plugin voiceKeepsMedia: Discord switches Android into MODE_IN_COMMUNICATION for voice
+  // (setCommunicationModeOn(true)), which makes Bluetooth headsets fall back to the low-quality call
+  // profile and pins input/output to one communication device. Without it, voice output follows
+  // normal media routing (A2DP headphones) and the capture source uses the phone's own microphone.
+  nativeSpecs['NativeAudioManagerModule'] = {
+    trace: ['*'],
+    override: {
+      setCommunicationModeOn: function (args) { return undefined; }
+    }
+  };
   nativeSpecs['NativeAudioRouteEmitterModule'] = { trace: ['*'] };
   // Plugin noPlayIntegrity: the re-signed app can never get a valid Play Integrity verdict, and a
   // verdict is never forged. Both calls reject cleanly so Discord takes its normal failure path.
