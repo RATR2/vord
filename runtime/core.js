@@ -301,7 +301,6 @@
   }
 
   // Phase 1 (observe): what do voice calls and age assurance do natively?
-  nativeSpecs['NativeFileModule'] = { trace: ['*'], cbTrace: [] };
   nativeSpecs['NativeTelecomModule'] = { trace: ['*'] };
   nativeSpecs['NativeSystemTelecomModule'] = { trace: ['*'] };
   // Plugin voiceKeepsMedia: Discord switches Android into MODE_IN_COMMUNICATION for voice
@@ -330,7 +329,7 @@
     }
   };
   nativeSpecs['NativePlayAgeSignalsModule'] = { trace: ['*'] };
-  nativeSpecs['NativeMediaEngineModule'] = { cbTrace: ['getInputDevices', 'getOutputDevices', 'getAudioSubsystem'], trace: ['setInputDevice', 'setOutputDevice', 'setInputDeviceById', 'setOutputDeviceById', 'getInputDevices', 'getOutputDevices', 'setAVAudioSessionMode', 'setAudioInputEnabled', 'createVoiceConnectionWithOptions', 'setHasFullbandPerformance'] };
+  // (NativeMediaEngineModule is deliberately NOT wrapped: it is called constantly during a call.)
 
   // RN's TurboModuleRegistry is a plain JS module: {get, getEnforcing}. Wrap both so every
   // native module lookup is visible (and later blockable). nativeModuleProxy itself is read-only.
@@ -800,5 +799,19 @@
     writeVordFile('.touch', '1');
     var tries = 0;
     (function again() { readAudioState().then(function (s) { if (!s && tries++ < 5 && typeof g.setTimeout === 'function') g.setTimeout(again, 1000); else if (s) log('audioChooser: state loaded, ' + (s.devices || []).length + ' devices'); }); })();
+  });
+
+  // ---- memory heartbeat (cheap): lets us see JS heap growth in the log -----------------------------
+  var hbStarted = false;
+  vord.onModule(function () {
+    if (hbStarted || vord.count < 600 || typeof g.setInterval !== 'function') return;
+    hbStarted = true;
+    g.setInterval(function () {
+      try {
+        var hi = g.HermesInternal && g.HermesInternal.getInstrumentedStats ? g.HermesInternal.getInstrumentedStats() : null;
+        var heap = hi ? Math.round((hi.js_heapSize || 0) / 1048576) + 'MB heap, ' + Math.round((hi.js_allocatedBytes || 0) / 1048576) + 'MB alloc, ' + (hi.js_numGCs || 0) + ' gcs' : 'n/a';
+        log('hb: ' + heap + ' | elements ' + elementCount + ' modules ' + vord.count);
+      } catch (e) { log('hb failed: ' + e); }
+    }, 5000);
   });
 })(globalThis);
