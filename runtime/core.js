@@ -327,15 +327,75 @@
     if (!hit && args.length > 2 && typeof args[2] === 'string' && HIDE_TEXT.test(args[2])) hit = 'child';
     if (!hit) return false;
     var n = typeName(type) || '?';
-    if (!hidden[n]) { hidden[n] = true; log('noPasskeys: hid <' + n + ' ' + hit + '>'); }
+    if (!hidden[n]) { hidden[n] = true; log('noPasskeys: hid <' + n + ' ' + hit + '>  stack: ' + stackTop(14)); }
     return true;
+  }
+  function stackTop(n) {
+    try {
+      return String(new Error().stack).split('\n').slice(2, 2 + n).map(function (l) {
+        return l.trim().replace(/^at\s+/, '').replace(/\s*\(.*\)\s*$/, '');
+      }).join(' < ');
+    } catch (e) { return ''; }
+  }
+  var OR_TEXT = /^\s*or\s*$/i;
+  var orLogged = 0;
+  function scanOr(type, props) {
+    if (orLogged >= 12 || !props || typeof props !== 'object') return;
+    var fields = ['text', 'label', 'title', 'children'];
+    for (var i = 0; i < fields.length; i++) {
+      var v = props[fields[i]];
+      if (Array.isArray(v) && v.length === 1) v = v[0];
+      if (typeof v === 'string' && OR_TEXT.test(v)) {
+        orLogged++;
+        log('OR-text <' + (typeName(type) || '?') + ' ' + fields[i] + '="' + v + '">  stack: ' + stackTop(14));
+        return;
+      }
+    }
+  }
+  // Wrapper component for a divider that may have to disappear. It always runs the original
+  // (so hook order never changes) and only discards the output; one stable type per original.
+  var passkeyHiddenEver = false;
+  function stackFrames(n) {
+    try {
+      return String(new Error().stack).split('\n').slice(2, 2 + n).map(function (l) {
+        return l.trim().replace(/^at\s+/, '').replace(/\s*\(.*\)\s*$/, '');
+      });
+    } catch (e) { return []; }
+  }
+  function hideableFor(orig) {
+    if (orig.__vordHideable) return orig.__vordHideable;
+    var W = function VordHideable(props) {
+      var out = props.__orig(props.__props);
+      var hide = props.__ctl.creatorLogin && passkeyHiddenEver;
+      if (hide && !props.__ctl.hidLogged) { props.__ctl.hidLogged = true; log('noPasskeys: hid the OrSeparator'); }
+      return hide ? null : out;
+    };
+    try { orig.__vordHideable = W; } catch (e) {}
+    return W;
   }
   function wrapElementFn(owner, key) {
     var orig = owner[key];
     if (typeof orig !== 'function' || orig.__vordEl) return false;
     var w = function (type, props) {
       onElement(type, props);
-      if (hideElement(type, props, arguments)) return null;
+      scanOr(type, props);
+      var name = typeName(type);
+      if (hideElement(type, props, arguments)) {
+        passkeyHiddenEver = true;
+        return null;
+      }
+      if (name === 'OrSeparator' && typeof type === 'function' && arguments.length <= 3) {
+        // The login screen draws one "or" divider just for the passkey button. Created by Login and
+        // rendered later (after Login's render already hid the button), so decide at render time.
+        var frames = stackFrames(5);
+        var li = frames.indexOf('Login');
+        var ctl = { creatorLogin: li >= 0 && li <= 3 };
+        if (!ctl.logged) { ctl.logged = true; log('OrSeparator created by ' + frames.slice(0, 4).join(' < ') + ' (creatorLogin=' + ctl.creatorLogin + ')'); }
+        var a = Array.prototype.slice.call(arguments);
+        a[0] = hideableFor(type);
+        a[1] = { __orig: type, __props: props, __ctl: ctl };
+        return orig.apply(this, a);
+      }
       return orig.apply(this, arguments);
     };
     w.__vordEl = true;
