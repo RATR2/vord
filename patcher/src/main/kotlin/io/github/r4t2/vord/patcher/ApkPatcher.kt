@@ -13,26 +13,42 @@ object ApkPatcher {
             (name.startsWith("META-INF/") && name.indexOf('/', 9) < 0 &&
                 (name.endsWith(".SF") || name.endsWith(".RSA") || name.endsWith(".DSA") || name.endsWith(".EC")))
 
-    class Result(val oldFactory: String?, val dexName: String?)
+    class Result(val oldFactory: String?, val dexName: String?, val originalPackage: String?)
+
+    /** Move the app to a different package name so it installs next to the original. */
+    class Rename(val to: String)
 
     /**
      * Rewrites [input] into [output] (unsigned): drops old signature entries and realigns. With a
      * [loaderDex] this is the base APK: the manifest's `appComponentFactory` is pointed at the Vord
      * Loader and the dex is added as the next free `classesN.dex`.
      */
-    fun rewrite(input: File, output: File, loaderDex: ByteArray?): Result {
+    fun rewrite(input: File, output: File, loaderDex: ByteArray?, rename: Rename? = null, from: String = "com.discord"): Result {
         var oldFactory: String? = null
         var dexName: String? = null
+        var originalPackage: String? = null
         ZipSource(input).use { src ->
             ZipSink(output).use { sink ->
                 val highest = src.entries.mapNotNull { DEX_NAME.matchEntire(it.name) }
                     .maxOfOrNull { it.groupValues[1].ifEmpty { "1" }.toInt() } ?: 1
                 for (e in src.entries) {
                     if (isSignatureEntry(e.name) || e.name.endsWith("/")) continue
-                    if (loaderDex != null && e.name == MANIFEST) {
-                        val patched = Axml.setApplicationAttribute(src.readAll(e), "appComponentFactory", LOADER_CLASS)
-                        oldFactory = patched.oldValue
+                    if (e.name == MANIFEST && (loaderDex != null || rename != null)) {
+                        val patched = Axml.edit(
+                            src.readAll(e),
+                            Axml.Edits(
+                                appComponentFactory = if (loaderDex != null) LOADER_CLASS else null,
+                                renameFrom = if (rename != null) from else null,
+                                renameTo = rename?.to,
+                            ),
+                        )
+                        oldFactory = patched.oldAppComponentFactory
+                        originalPackage = patched.originalPackage
                         sink.addStored(e.name, patched.bytes, e.time, e.date)
+                    } else if (e.name == "resources.arsc" && rename != null) {
+                        val arsc = src.readAll(e)
+                        Arsc.renamePackage(arsc, from, rename.to)
+                        sink.addStored(e.name, arsc, e.time, e.date)
                     } else {
                         sink.copy(src, e)
                     }
@@ -44,15 +60,15 @@ object ApkPatcher {
                 }
             }
         }
-        return Result(oldFactory, dexName)
+        return Result(oldFactory, dexName, originalPackage)
     }
 
     /** Full pipeline for one APK: rewrite to a temp file, sign into [output]. */
-    fun process(input: File, output: File, key: SigningKey, loaderDex: ByteArray?, tmpDir: File): Result {
+    fun process(input: File, output: File, key: SigningKey, loaderDex: ByteArray?, tmpDir: File, rename: Rename? = null): Result {
         tmpDir.mkdirs()
         val unsigned = File(tmpDir, input.name + ".unsigned")
         try {
-            val r = rewrite(input, unsigned, loaderDex)
+            val r = rewrite(input, unsigned, loaderDex, rename)
             Signer.sign(unsigned, output, key)
             return r
         } finally {

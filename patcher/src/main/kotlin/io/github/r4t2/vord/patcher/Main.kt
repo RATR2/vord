@@ -5,7 +5,7 @@ import java.util.zip.ZipFile
 
 /**
  * Desktop CLI used to exercise the patcher against real Discord bundles:
- *   patcher <bundle.apkm|dir> <outDir> --loader <classes.dex> --key <vord.p12> [--splits a,b,c]
+ *   patcher <bundle.apkm|dir> <outDir> --loader <classes.dex> --key <vord.p12> [--splits a,b,c] [--package id]
  * Patches base.apk, re-signs the chosen splits with the same key, prints the adb command.
  */
 fun main(args: Array<String>) {
@@ -15,6 +15,7 @@ fun main(args: Array<String>) {
     val loader = File(opt("--loader") ?: error("missing --loader"))
     val key = SigningKey.loadOrCreate(File(opt("--key") ?: error("missing --key")), "vord".toCharArray())
     val splits = opt("--splits")?.split(',')?.map { it.trim() }?.filter { it.isNotEmpty() }
+    val rename = opt("--package")?.let { ApkPatcher.Rename(it) }
     outDir.mkdirs()
     val work = File(outDir, "work").also { it.mkdirs() }
 
@@ -33,8 +34,8 @@ fun main(args: Array<String>) {
     for (apk in apks) {
         val out = File(outDir, apk.name)
         val isBase = apk.name == "base.apk"
-        val r = ApkPatcher.process(apk, out, key, if (isBase) loader.readBytes() else null, work)
-        println("${apk.name}: signed" + if (isBase) ", appComponentFactory ${r.oldFactory} -> ${ApkPatcher.LOADER_CLASS}, added ${r.dexName}" else "")
+        val r = ApkPatcher.process(apk, out, key, if (isBase) loader.readBytes() else null, work, rename)
+        println("${apk.name}: signed" + (if (rename != null) ", package ${r.originalPackage} -> ${rename.to}" else "") + if (isBase) ", appComponentFactory ${r.oldFactory} -> ${ApkPatcher.LOADER_CLASS}, added ${r.dexName}" else "")
         signed.add(out)
     }
     work.deleteRecursively()
