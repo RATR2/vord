@@ -86,6 +86,7 @@ final class ReactHook {
                     f.setAccessible(true);
                     JSBundleLoader original = (JSBundleLoader) f.get(delegate);
                     f.set(delegate, new VordBundleLoader(original, app));
+                    AudioPolicy.start(app);
                     Log.i(TAG, "JSBundleLoader replaced (was " + (original == null ? "null" : original.getClass().getName()) + ")");
                     return;
                 }
