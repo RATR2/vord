@@ -391,7 +391,9 @@
   // function every render), and a strong Map kept all of them, and everything they capture, alive.
   var nameCache = typeof WeakMap === 'function' ? new WeakMap() : null;
   function typeName(t) {
-    if (!t || typeof t === 'string') return '';
+    if (!t) return '';
+    var tt = typeof t;
+    if (tt !== 'function' && tt !== 'object') return ''; // strings, symbols (Fragment) can't be WeakMap keys
     if (nameCache) { var hit = nameCache.get(t); if (hit !== undefined) return hit; }
     var n = '';
     try {
