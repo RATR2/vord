@@ -219,6 +219,85 @@
   log('globals now: nativeModuleProxy=' + typeof g.nativeModuleProxy + ' RN$Bridgeless=' +
       typeof g['RN$Bridgeless'] + ' __fbBatchedBridge=' + typeof g.__fbBatchedBridge);
 
+  // ---- native module wrapping ---------------------------------------------------------------
+  // Modules returned by TurboModuleRegistry are JSI host objects. A Proxy in front of them can log
+  // calls, replace chosen methods, or hide a module entirely. One wrapper per module name.
+  var nativeSpecs = Object.create(null);   // name -> {trace: [method|'*'], override: {method: fn(args, orig, mod)}}
+  var nativeWrapped = Object.create(null);
+  var traceBudget = Object.create(null);
+  function briefArg(v) {
+    if (v === null || v === undefined) return String(v);
+    var t = typeof v;
+    if (t === 'string') return JSON.stringify(v.length > 40 ? v.slice(0, 40) + '..' : v);
+    if (t === 'number' || t === 'boolean') return String(v);
+    if (t === 'function') return 'fn';
+    if (t === 'object') {
+      try { var j = JSON.stringify(v); return j.length > 120 ? j.slice(0, 120) + '..' : j; } catch (e) { return '{..}'; }
+    }
+    return t;
+  }
+  function nativeWrap(name, mod) {
+    var spec = nativeSpecs[name];
+    if (!spec || !mod) return mod;
+    if (nativeWrapped[name]) return nativeWrapped[name];
+    if (typeof Proxy !== 'function') return mod;
+    var tr = spec.trace || [];
+    var all = tr.indexOf('*') >= 0;
+    var prox = new Proxy(mod, {
+      get: function (target, prop) {
+        var v = target[prop];
+        if (typeof prop !== 'string') return v;
+        var ov = spec.override && spec.override[prop];
+        if (ov) {
+          return function () {
+            var out = ov(arguments, v, target);
+            if (all || tr.indexOf(prop) >= 0) log('native ' + name + '.' + prop + '(' + Array.prototype.map.call(arguments, briefArg).join(', ') + ') OVERRIDDEN -> ' + briefArg(out));
+            return out;
+          };
+        }
+        if (typeof v === 'function' && (all || tr.indexOf(prop) >= 0)) {
+          return function () {
+            var key = name + '.' + prop;
+            var n = traceBudget[key] = (traceBudget[key] || 0) + 1;
+            var r = v.apply(target, arguments);
+            if (n <= 12) {
+              var isP = r && typeof r.then === 'function';
+              log('native ' + key + '(' + Array.prototype.map.call(arguments, briefArg).join(', ') + ') -> ' + (isP ? 'promise' : briefArg(r)));
+              if (isP) r.then(function (x) { log('  ' + key + ' resolved ' + briefArg(x)); }, function (e) { log('  ' + key + ' REJECTED ' + briefArg(e && e.message ? e.message : e)); });
+            }
+            return r;
+          };
+        }
+        return typeof v === 'function' ? v.bind(target) : v;
+      }
+    });
+    nativeWrapped[name] = prox;
+    log('native module wrapped: ' + name);
+    return prox;
+  }
+
+  // Phase 1 (observe): what do voice calls and age assurance do natively?
+  nativeSpecs['NativeTelecomModule'] = { trace: ['*'] };
+  nativeSpecs['NativeSystemTelecomModule'] = { trace: ['*'] };
+  nativeSpecs['NativeAudioManagerModule'] = { trace: ['*'] };
+  nativeSpecs['NativeAudioRouteEmitterModule'] = { trace: ['*'] };
+  // Plugin noPlayIntegrity: the re-signed app can never get a valid Play Integrity verdict, and a
+  // verdict is never forged. Both calls reject cleanly so Discord takes its normal failure path.
+  function integrityUnavailable() {
+    var e = new Error('Play Integrity is not available in this modded app');
+    e.code = 'E_VORD_INTEGRITY_UNAVAILABLE';
+    return Promise.reject(e);
+  }
+  nativeSpecs['NativePlayIntegrityModule'] = {
+    trace: ['*'],
+    override: {
+      prepareIntegrityToken: integrityUnavailable,
+      requestIntegrityToken: integrityUnavailable
+    }
+  };
+  nativeSpecs['NativePlayAgeSignalsModule'] = { trace: ['*'] };
+  nativeSpecs['NativeMediaEngineModule'] = { trace: ['setInputDevice', 'setOutputDevice', 'setInputDeviceById', 'setOutputDeviceById', 'getInputDevices', 'getOutputDevices', 'getAudioSubsystem', 'setAVAudioSessionMode', 'setAudioInputEnabled', 'createVoiceConnectionWithOptions', 'setHasFullbandPerformance'] };
+
   // RN's TurboModuleRegistry is a plain JS module: {get, getEnforcing}. Wrap both so every
   // native module lookup is visible (and later blockable). nativeModuleProxy itself is read-only.
   var registryDone = false;
@@ -232,8 +311,8 @@
         registryDone = true;
         var oget = r.get, oenf = r.getEnforcing;
         try {
-          r.get = function (name) { noteModule(name + ' [get]'); return oget.apply(this, arguments); };
-          r.getEnforcing = function (name) { noteModule(name + ' [getEnforcing]'); return oenf.apply(this, arguments); };
+          r.get = function (name) { noteModule(name + ' [get]'); return nativeWrap(name, oget.apply(this, arguments)); };
+          r.getEnforcing = function (name) { noteModule(name + ' [getEnforcing]'); return nativeWrap(name, oenf.apply(this, arguments)); };
           log('TurboModuleRegistry wrapped at module ' + id + (i ? '.default' : ''));
         } catch (e) { log('registry wrap failed: ' + e); }
         return;
