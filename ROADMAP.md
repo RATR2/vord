@@ -6,5 +6,5 @@
 - [ ] M1 - Manager patches a user-supplied Discord APK on-device (inject loader dex as classes4.dex, patch manifest appComponentFactory (not application name: MainApplication is final), re-zip/align/sign all splits, target Discord 353.11)
 - [x] M2 - JS core runtime loaded into Discord's Hermes context, one real Metro module patched
 - [ ] stub `PlayIntegrityModule` (RN TurboModule, age assurance) so it rejects cleanly instead of crashing; no forged verdicts (needs M2 hook; check what Discord JS does on rejection first)
-- [ ] first plugin: hide passkey / RP ID sign-in options (they cannot work on the renamed package and cert; find the UI module or feature flag with the M2 module dump)
+- [x] first plugin `noPasskeys`: hides the login screen's passkey button and its OR divider (runtime/core.js); still open: 2FA / security-key prompts and the Settings passkey section
 - [ ] M3 - plugin API (patcher/finder utilities), plugin manifest format, local + remote plugin loading, Manager UI for managing plugins and Discord versions
