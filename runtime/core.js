@@ -387,7 +387,9 @@
   var UI_WANT = /passkey|webauthn|securitykey|fido/i;
   var seenUi = Object.create(null);
   var elementCount = 0;
-  var nameCache = typeof Map === 'function' ? new Map() : null; // type -> name; runs per element, keep it cheap
+  // type -> name; runs per element. MUST be a WeakMap: Discord creates component types inline (a new
+  // function every render), and a strong Map kept all of them, and everything they capture, alive.
+  var nameCache = typeof WeakMap === 'function' ? new WeakMap() : null;
   function typeName(t) {
     if (!t || typeof t === 'string') return '';
     if (nameCache) { var hit = nameCache.get(t); if (hit !== undefined) return hit; }
