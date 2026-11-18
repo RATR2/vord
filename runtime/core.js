@@ -74,30 +74,48 @@
   }
 
   // ---- discovery + first patch -------------------------------------------------------------
-  // Find a store-like export with getCurrentUser (Discord's UserStore) and report its shape.
-  var patched = false;
+  // Find a store-like export with getCurrentUser (Discord's UserStore), report its shape, and
+  // wrap getCurrentUser so we can see it being used.
+  function keysOf(o) {
+    var out = [];
+    try {
+      var p = o;
+      for (var depth = 0; p && depth < 3 && out.length < 24; depth++, p = Object.getPrototypeOf(p)) {
+        var names = Object.getOwnPropertyNames(p);
+        for (var i = 0; i < names.length && out.length < 24; i++) {
+          if (names[i] !== 'constructor') out.push(names[i]);
+        }
+      }
+    } catch (e) {}
+    return out.join(',');
+  }
+  var seen = 0;
+  function wrapCurrentUser(label, s) {
+    var origGet = s.getCurrentUser;
+    var calls = 0;
+    s.getCurrentUser = function () {
+      var u = origGet.apply(this, arguments);
+      calls++;
+      if (calls === 1 || calls === 100 || calls === 10000) {
+        log('getCurrentUser[' + label + '] call #' + calls + ' -> ' +
+            (u ? 'user (id ' + (u.id ? 'set' : 'missing') + ', username ' + (typeof u.username) + ')' : String(u)));
+      }
+      return u;
+    };
+  }
   vord.onModule(function (id, exp) {
-    if (patched || !exp) return;
+    if (!exp || seen >= 8) return;
     var cands = [exp, exp.default];
     for (var i = 0; i < cands.length; i++) {
       var s = cands[i];
-      if (s && typeof s === 'object' && typeof s.getCurrentUser === 'function' &&
-          typeof s.getUser === 'function') {
-        log('UserStore candidate at module ' + id + (i ? ' (default export)' : '') +
-            ' name=' + (typeof s.getName === 'function' ? s.getName() : '?'));
-        var origGet = s.getCurrentUser;
-        s.getCurrentUser = function () {
-          var u = origGet.apply(this, arguments);
-          if (u && typeof u === 'object') {
-            if (!vord.userLogged) {
-              vord.userLogged = true;
-              log('getCurrentUser patched OK, user id present: ' + (u.id ? 'yes' : 'no'));
-            }
-          }
-          return u;
-        };
-        patched = true;
-        return;
+      if (s && (typeof s === 'object' || typeof s === 'function') &&
+          typeof s.getCurrentUser === 'function' && typeof s.getUser === 'function') {
+        seen++;
+        var label = id + (i ? '.default' : '');
+        var proto = Object.getPrototypeOf(s);
+        log('UserStore candidate ' + label + ' ctor=' + (s.constructor && s.constructor.name) +
+            ' plain=' + (proto === Object.prototype) + ' keys=' + keysOf(s));
+        try { wrapCurrentUser(label, s); } catch (e) { log('wrap failed for ' + label + ': ' + e); }
       }
     }
   });
