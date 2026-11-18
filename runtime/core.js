@@ -392,6 +392,7 @@
       return n || '';
     } catch (e) { return ''; }
   }
+  var dumpUntil = 0, dumpBudget = 0;
   var TEXT_WANT = /passkey|security key|pass key|webauthn|change audio|audio output|audio input/i;
   var seenText = Object.create(null);
   function scanProps(n, props) {
@@ -404,6 +405,7 @@
       var str = typeof v === 'string' ? v : (Array.isArray(v) && v.length === 1 && typeof v[0] === 'string' ? v[0] : null);
       if (str && str.length < 120 && TEXT_WANT.test(str)) {
         var k = n + '|' + keys[i] + '|' + str;
+        if (/select audio output|change audio output/i.test(str)) { dumpUntil = Date.now() + 1800; dumpBudget = 160; }
         if (!seenText[k]) { seenText[k] = true; log('UI text: <' + (n || '?') + ' ' + keys[i] + '="' + str + '">' + (/audio/i.test(str) ? '  props=' + Object.keys(props).join(',') + '  stack: ' + stackTop(12) : '')); }
       }
     }
@@ -487,6 +489,18 @@
     if (typeof orig !== 'function' || orig.__vordEl) return false;
     var w = function (type, props) {
       onElement(type, props);
+      if (dumpBudget > 0 && Date.now() < dumpUntil) {
+        dumpBudget--;
+        var pk = props && typeof props === 'object' ? Object.keys(props).filter(function (k) { return k !== 'children' && k !== 'style' && k !== 'ref'; }).slice(0, 12).join(',') : '';
+        var tv = '';
+        if (props && typeof props === 'object') {
+          var tf = ['label', 'title', 'text', 'subLabel', 'children', 'accessibilityLabel'];
+          for (var q = 0; q < tf.length; q++) { var vv = props[tf[q]]; if (typeof vv === 'string') { tv += ' ' + tf[q] + '="' + vv.slice(0, 40) + '"'; } }
+        }
+        var fr = stackFrames(4);
+        if (typeName(type) && fr[0] !== 'w') {}
+        log('UI+ <' + (typeName(type) || (typeof type === 'string' ? type : '?')) + tv + '> props=' + pk + ' by ' + fr.slice(0, 3).join(' < '));
+      }
       scanOr(type, props);
       var name = typeName(type);
       if (hideElement(type, props, arguments)) {
