@@ -26,6 +26,9 @@ object Keys {
         MessageDigest.getInstance("SHA-256").digest(key.certificate.encoded)
             .joinToString("") { "%02x".format(it) }.take(16)
 
+    /** Short fingerprint of the stored key, for display. */
+    fun fingerprintOf(ctx: Context): String = try { fingerprint(load(ctx)) } catch (e: Exception) { "unreadable" }
+
     /** Replaces the key with a PKCS12 file the user picked. Returns an error message or null. */
     fun import(ctx: Context, uri: Uri): String? {
         val tmp = File(ctx.cacheDir, "import.p12")
