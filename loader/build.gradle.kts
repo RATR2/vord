@@ -10,6 +10,9 @@ java {
     targetCompatibility = JavaVersion.VERSION_17
 }
 
+// Signatures of Discord's own React Native classes, compile-time only (never in the dex).
+val stubs: SourceSet = sourceSets.create("stubs")
+
 val sdkDir: String = System.getenv("ANDROID_HOME") ?: System.getenv("ANDROID_SDK_ROOT")
     ?: rootProject.file("local.properties").takeIf { it.exists() }?.readLines()
         ?.firstOrNull { it.startsWith("sdk.dir=") }?.substringAfter("=")
@@ -25,6 +28,8 @@ val d8: Configuration by configurations.creating
 
 dependencies {
     compileOnly(files(androidJar))
+    compileOnly(stubs.output)
+    "stubsCompileOnly"(files(androidJar))
     d8("com.android.tools:r8:9.5.33")
 }
 

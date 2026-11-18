@@ -4,6 +4,8 @@ import java.io.File
 
 object ApkPatcher {
     const val LOADER_CLASS = "io.github.r4t2.vord.Loader"
+    /** Where the Loader looks for the JS core inside the APK (assets://vord/core.js). */
+    const val CORE_ASSET = "assets/vord/core.js"
     private const val MANIFEST = "AndroidManifest.xml"
     private val DEX_NAME = Regex("classes(\\d*)\\.dex")
 
@@ -23,7 +25,10 @@ object ApkPatcher {
      * [loaderDex] this is the base APK: the manifest's `appComponentFactory` is pointed at the Vord
      * Loader and the dex is added as the next free `classesN.dex`.
      */
-    fun rewrite(input: File, output: File, loaderDex: ByteArray?, rename: Rename? = null, from: String = "com.discord"): Result {
+    fun rewrite(
+        input: File, output: File, loaderDex: ByteArray?, rename: Rename? = null, from: String = "com.discord",
+        coreJs: ByteArray? = null,
+    ): Result {
         var oldFactory: String? = null
         var dexName: String? = null
         var originalPackage: String? = null
@@ -57,6 +62,7 @@ object ApkPatcher {
                     require(oldFactory != null) { "$MANIFEST not found" }
                     dexName = "classes${highest + 1}.dex"
                     sink.addStored(dexName!!, loaderDex)
+                    if (coreJs != null) sink.addStored(CORE_ASSET, coreJs)
                 }
             }
         }
@@ -64,11 +70,14 @@ object ApkPatcher {
     }
 
     /** Full pipeline for one APK: rewrite to a temp file, sign into [output]. */
-    fun process(input: File, output: File, key: SigningKey, loaderDex: ByteArray?, tmpDir: File, rename: Rename? = null): Result {
+    fun process(
+        input: File, output: File, key: SigningKey, loaderDex: ByteArray?, tmpDir: File,
+        rename: Rename? = null, coreJs: ByteArray? = null,
+    ): Result {
         tmpDir.mkdirs()
         val unsigned = File(tmpDir, input.name + ".unsigned")
         try {
-            val r = rewrite(input, unsigned, loaderDex, rename)
+            val r = rewrite(input, unsigned, loaderDex, rename, coreJs = coreJs)
             Signer.sign(unsigned, output, key)
             return r
         } finally {

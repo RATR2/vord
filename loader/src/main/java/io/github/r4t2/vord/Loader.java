@@ -49,6 +49,7 @@ public final class Loader extends AppComponentFactory {
         Application app = delegate != null ? delegate.instantiateApplication(cl, className)
                 : super.instantiateApplication(cl, className);
         Log.i(TAG, "application instantiated: " + className);
+        ReactHook.install(cl, app);
         return app;
     }
 
