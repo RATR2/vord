@@ -298,6 +298,7 @@
   }
 
   // Phase 1 (observe): what do voice calls and age assurance do natively?
+  nativeSpecs['NativeFileModule'] = { trace: ['*'], cbTrace: [] };
   nativeSpecs['NativeTelecomModule'] = { trace: ['*'] };
   nativeSpecs['NativeSystemTelecomModule'] = { trace: ['*'] };
   // Plugin voiceKeepsMedia: Discord switches Android into MODE_IN_COMMUNICATION for voice
@@ -343,6 +344,7 @@
         try {
           r.get = function (name) { noteModule(name + ' [get]'); return nativeWrap(name, oget.apply(this, arguments)); };
           r.getEnforcing = function (name) { noteModule(name + ' [getEnforcing]'); return nativeWrap(name, oenf.apply(this, arguments)); };
+          vord.registry = { get: oget, getEnforcing: oenf, owner: r };
           log('TurboModuleRegistry wrapped at module ' + id + (i ? '.default' : ''));
         } catch (e) { log('registry wrap failed: ' + e); }
         return;
@@ -503,6 +505,11 @@
       }
       scanOr(type, props);
       var name = typeName(type);
+      if (name === 'VoicePanelAudioPhoneOutputSection' && typeof type === 'function' && vord.ui && vord.React && audioCache) {
+        var ca = Array.prototype.slice.call(arguments);
+        ca[0] = chooserFor(type);
+        return orig.apply(this, ca);
+      }
       if (hideElement(type, props, arguments)) {
         passkeyHiddenEver = true;
         return null;
@@ -536,8 +543,173 @@
         try { wrapElementFn(o, 'jsx'); wrapElementFn(o, 'jsxs'); jsxDone = true; log('jsx runtime hooked at module ' + id); } catch (e) { log('jsx hook failed: ' + e); }
       }
       if (!createDone && typeof o.createElement === 'function' && typeof o.useState === 'function') {
-        try { wrapElementFn(o, 'createElement'); createDone = true; log('React.createElement hooked at module ' + id); } catch (e) { log('createElement hook failed: ' + e); }
+        try { wrapElementFn(o, 'createElement'); createDone = true; vord.React = o; log('React.createElement hooked at module ' + id); } catch (e) { log('createElement hook failed: ' + e); }
       }
     }
+  });
+
+  // ---- native module access for plugins -------------------------------------------------------
+  vord.native = function (name) {
+    try { return nativeWrap(name, vord.registry.getEnforcing.call(vord.registry.owner, name)); }
+    catch (e) { log('native(' + name + ') failed: ' + e); return null; }
+  };
+  // Safe call: never lets an exception (or a rejection) escape into Discord's error handler.
+  vord.safe = function (fn, label) {
+    try {
+      var r = fn();
+      if (r && typeof r.then === 'function') r.then(null, function (e) { log((label || 'call') + ' rejected: ' + String(e && e.message ? e.message : e).slice(0, 200)); });
+      return r;
+    } catch (e) { log((label || 'call') + ' threw: ' + String(e && e.message ? e.message : e).slice(0, 200)); return null; }
+  };
+  var fileProbeDone = false;
+  vord.onModule(function () {
+    if (fileProbeDone || vord.count < 300 || !vord.registry) return;
+    fileProbeDone = true;
+    var F = vord.native('NativeFileModule');
+    if (!F) return;
+    vord.safe(function () {
+      return F.writeFile('documents', 'vord/probe.txt', 'probe1', 'utf8').then(function (p) {
+        log('FILEPROBE writeFile documents -> ' + p);
+        return F.readAsset('file://' + p, 'utf8').then(function (t) { log('FILEPROBE readAsset(file://path) -> ' + t); });
+      });
+    }, 'fileprobe');
+  });
+
+  // ---- plugin: audioChooser ------------------------------------------------------------------
+  // Replaces the sheet's "This Phone" output list with an Output list and a Microphone list that
+  // reflect what Android really routes. State comes from the Loader (audio.state.json); choices go
+  // back as commands (audio.cmd). One pinned "communication device" ties a headset's speaker and mic
+  // together (call quality); no pin = Android default routing = headphones out + phone mic.
+  var FILES = null; // absolute dir of <filesDir>/vord, learnt from the first write
+  var audioCache = null;
+  function fileModule() { return vord.registry ? vord.native('NativeFileModule') : null; }
+  function writeVordFile(name, text) {
+    var F = fileModule();
+    if (!F) return null;
+    return vord.safe(function () {
+      return F.writeFile('documents', 'vord/' + name, text, 'utf8').then(function (p) {
+        FILES = String(p).replace(/\/[^\/]*$/, '');
+        return p;
+      });
+    }, 'write ' + name);
+  }
+  function readAudioState() {
+    var F = fileModule();
+    if (!F || !FILES) return Promise.resolve(null);
+    return vord.safe(function () {
+      return F.readAsset('file://' + FILES + '/audio.state.json', 'utf8').then(function (t) {
+        try { audioCache = JSON.parse(t); } catch (e) { log('audio state parse failed'); }
+        return audioCache;
+      });
+    }, 'read audio state') || Promise.resolve(null);
+  }
+  function sendAudio(lines) {
+    log('audioChooser: command ' + lines.join(' ; '));
+    writeVordFile('audio.cmd', lines.join('\n') + '\n');
+  }
+  var UI_KINDS = { bt_a2dp: 1, wired_headphones: 1, wired_headset: 1, usb_headset: 1, usb_device: 1, ble_speaker: 1, ble_broadcast: 1 };
+  var CALL_KINDS = { bt_sco: 1, ble_headset: 1, wired_headset: 1, usb_headset: 1, hearing_aid: 1 };
+  function prettyKind(k) { return ({ bt_a2dp: 'Bluetooth', bt_sco: 'Bluetooth', ble_headset: 'Bluetooth LE', ble_speaker: 'Bluetooth LE', wired_headset: 'Wired headset', wired_headphones: 'Wired headphones', usb_headset: 'USB headset', usb_device: 'USB audio', hearing_aid: 'Hearing aid', ble_broadcast: 'Bluetooth LE' })[k] || k; }
+  function buildModel(st) {
+    var devs = st.devices || [];
+    var comm = st.comm;
+    var outs = [], mics = [];
+    var commDevs = devs.filter(function (d) { return d.comm; });
+    function find(kind) { return commDevs.filter(function (d) { return d.kind === kind; })[0]; }
+    var ear = find('earpiece'), spk = find('speaker');
+    if (ear) outs.push({ value: 'comm:' + ear.id, label: 'Phone earpiece', sub: 'Phone', cmd: ['mode media', 'pin ' + ear.id] });
+    if (spk) outs.push({ value: 'comm:' + spk.id, label: 'Phone speaker', sub: 'Phone', cmd: ['mode media', 'pin ' + spk.id] });
+    var seenMedia = {};
+    var firstMedia = null;
+    devs.forEach(function (d) {
+      if (d.sink && UI_KINDS[d.kind] && !seenMedia[d.addr + d.name]) {
+        seenMedia[d.addr + d.name] = true;
+        var o = { value: 'media:' + d.id, label: d.name, sub: prettyKind(d.kind) + ', music quality', cmd: ['mode media', 'clear'] };
+        if (!firstMedia) firstMedia = o;
+        outs.push(o);
+      }
+    });
+    commDevs.forEach(function (d) {
+      if (CALL_KINDS[d.kind]) {
+        outs.push({ value: 'comm:' + d.id, label: d.name, sub: prettyKind(d.kind) + ', call quality', cmd: ['mode headset', 'pin ' + d.id] });
+      }
+    });
+    mics.push({ value: 'phone', label: 'Phone microphone', sub: 'Phone', cmd: null });
+    commDevs.forEach(function (d) {
+      if (CALL_KINDS[d.kind]) {
+        mics.push({ value: 'comm:' + d.id, label: d.name + ' microphone', sub: prettyKind(d.kind) + ', call quality (also moves the output)', cmd: ['mode headset', 'pin ' + d.id] });
+      }
+    });
+    var outSel, micSel;
+    if (comm) {
+      outSel = 'comm:' + comm.id;
+      micSel = (comm.kind === 'earpiece' || comm.kind === 'speaker') ? 'phone' : 'comm:' + comm.id;
+    } else {
+      outSel = firstMedia ? firstMedia.value : (ear ? 'comm:' + ear.id : (outs[0] && outs[0].value));
+      micSel = 'phone';
+    }
+    return { outs: outs, mics: mics, outSel: outSel, micSel: micSel, comm: comm, firstMedia: firstMedia };
+  }
+  var chooserTypes = [];
+  function chooserFor(orig) {
+    for (var i = 0; i < chooserTypes.length; i++) if (chooserTypes[i].orig === orig) return chooserTypes[i].comp;
+    var comp = function VordAudioChooser(props) {
+      var R = vord.React, ui = vord.ui;
+      var useState = R.useState, useEffect = R.useEffect;
+      var st = useState(audioCache);
+      var state = st[0], setState = st[1];
+      useEffect(function () {
+        var alive = true;
+        function poll() { readAudioState().then(function (s) { if (alive && s) setState(s); }); }
+        if (!FILES) writeVordFile('.touch', '1');
+        poll();
+        var t1 = g.setTimeout(poll, 700);
+        var id = g.setInterval(poll, 2500);
+        return function () { alive = false; g.clearInterval(id); g.clearTimeout(t1); };
+      }, []);
+      if (!state || !ui || !state.devices) return R.createElement(orig, props);
+      var m = buildModel(state);
+      function choose(list, v, isMic) {
+        var item = list.filter(function (x) { return x.value === v; })[0];
+        if (!item) return;
+        var cmd = item.cmd;
+        if (isMic && v === 'phone') {
+          // phone microphone: leave a headset's call profile and use default routing again
+          if (m.comm && m.comm.kind !== 'earpiece' && m.comm.kind !== 'speaker') cmd = ['mode media', 'clear'];
+          else return;
+        }
+        if (cmd) sendAudio(cmd);
+      }
+      function rows(list) {
+        return list.map(function (x) { return R.createElement(ui.TableRadioRow, { key: x.value, value: x.value, label: x.label, subLabel: x.sub }); });
+      }
+      return R.createElement(R.Fragment, null,
+        R.createElement(ui.TableRadioGroup, { title: 'Output', value: m.outSel, onChange: function (v) { choose(m.outs, v, false); }, hasIcons: false }, rows(m.outs)),
+        R.createElement(ui.TableRadioGroup, { title: 'Microphone', value: m.micSel, onChange: function (v) { choose(m.mics, v, true); }, hasIcons: false }, rows(m.mics)));
+    };
+    chooserTypes.push({ orig: orig, comp: comp });
+    return comp;
+  }
+  // find the design-system components by export name
+  vord.ui = null;
+  vord.onModule(function (id, exp) {
+    if (vord.ui || !exp) return;
+    var cands = [exp, exp.default];
+    for (var i = 0; i < cands.length; i++) {
+      var o = cands[i];
+      if (o && typeof o === 'object') {
+        var a, b;
+        try { a = o.TableRadioGroup; b = o.TableRadioRow; } catch (e) { continue; }
+        if (a && b) { vord.ui = { TableRadioGroup: a, TableRadioRow: b }; log('audioChooser: design components found in module ' + id); return; }
+      }
+    }
+  });
+  // warm the state cache early so the first sheet open already has data
+  vord.onModule(function () {
+    if (vord._audioWarm || vord.count < 400 || !vord.registry) return;
+    vord._audioWarm = true;
+    writeVordFile('.touch', '1');
+    var tries = 0;
+    (function again() { readAudioState().then(function (s) { if (!s && tries++ < 5 && typeof g.setTimeout === 'function') g.setTimeout(again, 1000); else if (s) log('audioChooser: state loaded, ' + (s.devices || []).length + ' devices'); }); })();
   });
 })(globalThis);
