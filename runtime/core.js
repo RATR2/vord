@@ -15,7 +15,7 @@
   // Enable with a file <externalFilesDir>/vord/debug (checked by the Loader via the override path).
   var DEBUG = false;
   // Feature switches (for bisecting problems on a device).
-  var FEATURES = { commOverride: true, chooser: true, noPasskeys: true, integrity: true, audioTrace: true };
+  var FEATURES = { proximityGuard: true, commOverride: true, chooser: true, noPasskeys: true, integrity: true, audioTrace: true };
 
   var vord = g.__vord = {
     version: '0.0.1-m2',
@@ -305,6 +305,37 @@
   // Phase 1 (observe): what do voice calls and age assurance do natively?
   nativeSpecs['NativeTelecomModule'] = { trace: ['*'] };
   nativeSpecs['NativeSystemTelecomModule'] = { trace: ['*'] };
+  // Plugin proximityGuard: Discord thinks the call is on the earpiece (it keeps reporting "Receiver"
+  // because we keep Android out of call mode), so it asks for the proximity sensor to blank the screen
+  // whenever a hand is near it, and the screen flashes. Only allow that when the earpiece really is
+  // the pinned output; headphones, speaker and default routing never blank the screen.
+  var proximityWanted = false;
+  function earpiecePinned() {
+    var st = audioCache;
+    if (!st || st.pinned === null || st.pinned === undefined) return false;
+    var d = (st.devices || []).filter(function (x) { return x.id === st.pinned; })[0];
+    return !!d && d.kind === 'earpiece';
+  }
+  function applyProximity(reason) {
+    if (!FEATURES.proximityGuard || !vord.registry) return;
+    var allow = proximityWanted && earpiecePinned();
+    vord.safe(function () {
+      var raw = vord.registry.getEnforcing.call(vord.registry.owner, 'NativeProximitySensorManagerModule');
+      raw.setProximityMonitoringEnabled(allow);
+      log('proximityGuard: ' + reason + ' -> proximity monitoring ' + allow + ' (discord wants ' + proximityWanted + ')');
+    }, 'proximity');
+  }
+  nativeSpecs['NativeProximitySensorManagerModule'] = {
+    override: {
+      setProximityMonitoringEnabled: function (args, orig, target) {
+        proximityWanted = !!args[0];
+        if (!FEATURES.proximityGuard) return orig.apply(target, args);
+        var allow = proximityWanted && earpiecePinned();
+        log('proximityGuard: discord asked ' + proximityWanted + ' -> ' + allow);
+        return orig.call(target, allow);
+      }
+    }
+  };
   // Plugin voiceKeepsMedia: Discord switches Android into MODE_IN_COMMUNICATION for voice
   // (setCommunicationModeOn(true)), which makes Bluetooth headsets fall back to the low-quality call
   // profile and pins input/output to one communication device. Without it, voice output follows
@@ -747,6 +778,7 @@
           optMic = wantsHeadset ? v : 'phone';
         }
         setPending({ out: optOut, mic: optMic });
+        g.setTimeout(function () { applyProximity('after choice'); }, 700);
         g.setTimeout(function () { if (chooserPoll) chooserPoll(); }, 150);
         g.setTimeout(function () { if (chooserPoll) chooserPoll(); }, 500);
         g.setTimeout(function () { if (chooserPoll) chooserPoll(); setPending(null); }, 1400);
