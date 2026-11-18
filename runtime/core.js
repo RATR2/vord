@@ -14,6 +14,8 @@
   // Discovery/tracing tools are expensive (they run for every element and module); off by default.
   // Enable with a file <externalFilesDir>/vord/debug (checked by the Loader via the override path).
   var DEBUG = false;
+  // Feature switches (for bisecting problems on a device).
+  var FEATURES = { commOverride: true, chooser: true, noPasskeys: true, integrity: true, audioTrace: true };
 
   var vord = g.__vord = {
     version: '0.0.1-m2',
@@ -310,7 +312,7 @@
   nativeSpecs['NativeAudioManagerModule'] = {
     trace: ['*'],
     override: {
-      setCommunicationModeOn: function (args) { return undefined; }
+      setCommunicationModeOn: function (args, orig, target) { return FEATURES.commOverride ? undefined : orig.apply(target, args); }
     }
   };
   nativeSpecs['NativeAudioRouteEmitterModule'] = { trace: ['*'] };
