@@ -505,7 +505,7 @@
       }
       scanOr(type, props);
       var name = typeName(type);
-      if (name === 'VoicePanelAudioPhoneOutputSection' && typeof type === 'function' && vord.ui && vord.React && audioCache) {
+      if (name === 'VoicePanelAudioPhoneOutputSection' && typeof type === 'function' && vord.ui && vord.React && audioCache && !vord._chooserBroken) {
         var ca = Array.prototype.slice.call(arguments);
         ca[0] = chooserFor(type);
         return orig.apply(this, ca);
@@ -640,15 +640,41 @@
         mics.push({ value: 'comm:' + d.id, label: d.name + ' microphone', sub: prettyKind(d.kind) + ', call quality (also moves the output)', cmd: ['mode headset', 'pin ' + d.id] });
       }
     });
+    // "pinned" = the device we (or Discord) explicitly set as communication device. The platform's
+    // getCommunicationDevice() always returns something (the earpiece by default), so it is not used.
+    var pinnedDev = null;
+    if (st.pinned !== null && st.pinned !== undefined) {
+      pinnedDev = devs.filter(function (d) { return d.id === st.pinned; })[0] || null;
+    }
+    comm = pinnedDev;
     var outSel, micSel;
-    if (comm) {
-      outSel = 'comm:' + comm.id;
-      micSel = (comm.kind === 'earpiece' || comm.kind === 'speaker') ? 'phone' : 'comm:' + comm.id;
+    if (pinnedDev) {
+      outSel = 'comm:' + pinnedDev.id;
+      micSel = (pinnedDev.kind === 'earpiece' || pinnedDev.kind === 'speaker') ? 'phone' : 'comm:' + pinnedDev.id;
     } else {
       outSel = firstMedia ? firstMedia.value : (ear ? 'comm:' + ear.id : (outs[0] && outs[0].value));
       micSel = 'phone';
     }
     return { outs: outs, mics: mics, outSel: outSel, micSel: micSel, comm: comm, firstMedia: firstMedia };
+  }
+  // If our rows ever fail to render, show Discord's own list instead of crashing the app.
+  var boundaryClass = null;
+  function boundaryFor(R) {
+    if (boundaryClass) return boundaryClass;
+    function Boundary(props) { R.Component.call(this, props); this.state = { failed: false }; }
+    Boundary.prototype = Object.create(R.Component.prototype);
+    Boundary.prototype.constructor = Boundary;
+    Boundary.getDerivedStateFromError = function () { return { failed: true }; };
+    Boundary.prototype.componentDidCatch = function (err, info) {
+      log('chooser render failed, falling back to Discord list: ' + String(err && err.message ? err.message : err).slice(0, 200));
+      vord._chooserBroken = true;
+    };
+    Boundary.prototype.render = function () {
+      if (this.state.failed) return R.createElement(this.props.orig, this.props.props);
+      return this.props.children;
+    };
+    boundaryClass = Boundary;
+    return Boundary;
   }
   var chooserTypes = [];
   function chooserFor(orig) {
@@ -669,6 +695,12 @@
       }, []);
       if (!state || !ui || !state.devices) return R.createElement(orig, props);
       var m = buildModel(state);
+      if (!vord._chooserDiag) {
+        vord._chooserDiag = true;
+        log('chooser diag: Fragment=' + typeof R.Fragment + ' Component=' + typeof R.Component + ' Group=' + typeof ui.TableRadioGroup + '/' + typeName(ui.TableRadioGroup) +
+            ' Row=' + typeof ui.TableRadioRow + '/' + typeName(ui.TableRadioRow) + ' outs=' + m.outs.length + ' mics=' + m.mics.length +
+            ' sel=' + m.outSel + ',' + m.micSel + ' outs=' + m.outs.map(function (x) { return x.value + ':' + x.label; }).join('|'));
+      }
       function choose(list, v, isMic) {
         var item = list.filter(function (x) { return x.value === v; })[0];
         if (!item) return;
@@ -683,9 +715,9 @@
       function rows(list) {
         return list.map(function (x) { return R.createElement(ui.TableRadioRow, { key: x.value, value: x.value, label: x.label, subLabel: x.sub }); });
       }
-      return R.createElement(R.Fragment, null,
+      return R.createElement(boundaryFor(R), { orig: orig, props: props }, R.createElement(R.Fragment, null,
         R.createElement(ui.TableRadioGroup, { title: 'Output', value: m.outSel, onChange: function (v) { choose(m.outs, v, false); }, hasIcons: false }, rows(m.outs)),
-        R.createElement(ui.TableRadioGroup, { title: 'Microphone', value: m.micSel, onChange: function (v) { choose(m.mics, v, true); }, hasIcons: false }, rows(m.mics)));
+        R.createElement(ui.TableRadioGroup, { title: 'Microphone', value: m.micSel, onChange: function (v) { choose(m.mics, v, true); }, hasIcons: false }, rows(m.mics))));
     };
     chooserTypes.push({ orig: orig, comp: comp });
     return comp;

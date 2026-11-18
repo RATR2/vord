@@ -38,6 +38,8 @@ import java.util.concurrent.Executor;
 final class AudioPolicy {
     private static final String TAG = "Vord";
     private static boolean started;
+    /** Device id pinned as communication device by us (chooser/Discord), -1 = default routing. */
+    private static int pinnedId = -1;
     private static FileObserver observer; // kept so it is not garbage collected
 
     private AudioPolicy() {}
@@ -93,6 +95,7 @@ final class AudioPolicy {
             Log.i(TAG, "audio policy: clearing communication device type=" + device.getType()
                     + " (" + device.getProductName() + "), mode=" + mode);
             am.clearCommunicationDevice();
+            pinnedId = -1;
         } catch (Throwable t) {
             Log.e(TAG, "audio policy enforce failed", t);
         }
@@ -170,6 +173,7 @@ final class AudioPolicy {
             JSONObject root = new JSONObject();
             root.put("t", System.currentTimeMillis());
             root.put("mode", mode(app));
+            root.put("pinned", pinnedId < 0 ? JSONObject.NULL : (Object) Integer.valueOf(pinnedId));
             AudioDeviceInfo comm = am.getCommunicationDevice();
             root.put("comm", comm == null ? JSONObject.NULL : new JSONObject()
                     .put("id", comm.getId()).put("kind", String.valueOf(kind(comm.getType()))));
@@ -234,6 +238,7 @@ final class AudioPolicy {
                     Log.i(TAG, "audio cmd: mode " + p[1]);
                 } else if (p[0].equals("clear")) {
                     am.clearCommunicationDevice();
+                    pinnedId = -1;
                     Log.i(TAG, "audio cmd: clear");
                 } else if (p[0].equals("pin") && p.length == 2) {
                     int id = Integer.parseInt(p[1]);
@@ -241,6 +246,7 @@ final class AudioPolicy {
                     for (AudioDeviceInfo d : am.getAvailableCommunicationDevices()) {
                         if (d.getId() == id) {
                             ok = am.setCommunicationDevice(d);
+                            if (ok) pinnedId = id;
                         }
                     }
                     Log.i(TAG, "audio cmd: pin " + id + " -> " + ok);
