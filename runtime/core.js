@@ -460,7 +460,7 @@
     elementCount++;
     if (elementCount === 1 || elementCount === 500 || elementCount === 5000) log('elements created: ' + elementCount);
     var n = typeName(type);
-    if (n === 'TableRadioGroup' || n === 'TableRadioRow') captureUi(n, type);
+    if (n === 'TableRadioGroup' || n === 'TableRadioRow' || n === 'VoicePanelFormSection') captureUi(n, type);
     if (DEBUG && n && UI_WANT.test(n) && !seenUi[n]) {
       seenUi[n] = true;
       log('UI element: ' + n);
@@ -664,27 +664,29 @@
     var commDevs = devs.filter(function (d) { return d.comm; });
     function find(kind) { return commDevs.filter(function (d) { return d.kind === kind; })[0]; }
     var ear = find('earpiece'), spk = find('speaker');
-    if (ear) outs.push({ value: 'comm:' + ear.id, label: 'Phone earpiece', sub: 'The small top speaker, for holding the phone to your ear', cmd: ['mode media', 'pin ' + ear.id] });
-    if (spk) outs.push({ value: 'comm:' + spk.id, label: 'Phone speaker', sub: 'The loudspeaker', cmd: ['mode media', 'pin ' + spk.id] });
+    var mediaOuts = [], phoneOuts = [], callOuts = [];
+    if (spk) phoneOuts.push({ value: 'comm:' + spk.id, label: 'Phone speaker', sub: 'Loudspeaker', cmd: ['mode media', 'pin ' + spk.id] });
+    if (ear) phoneOuts.push({ value: 'comm:' + ear.id, label: 'Phone earpiece', sub: 'Top speaker, held to your ear', cmd: ['mode media', 'pin ' + ear.id] });
     var seenMedia = {};
     var firstMedia = null;
     devs.forEach(function (d) {
       if (d.sink && UI_KINDS[d.kind] && !seenMedia[d.addr + d.name]) {
         seenMedia[d.addr + d.name] = true;
-        var o = { value: 'media:' + d.id, label: d.name, sub: prettyKind(d.kind) + ', music quality', cmd: ['mode media', 'clear'] };
+        var o = { value: 'media:' + d.id, label: d.name, sub: 'Music quality, ' + prettyKind(d.kind), cmd: ['mode media', 'clear'] };
         if (!firstMedia) firstMedia = o;
-        outs.push(o);
+        mediaOuts.push(o);
       }
     });
     commDevs.forEach(function (d) {
       if (CALL_KINDS[d.kind]) {
-        outs.push({ value: 'comm:' + d.id, label: d.name, sub: prettyKind(d.kind) + ', call quality', cmd: ['mode headset', 'pin ' + d.id] });
+        callOuts.push({ value: 'comm:' + d.id, label: d.name + ' (call mode)', sub: 'Lower quality, uses the headset mic', cmd: ['mode headset', 'pin ' + d.id] });
       }
     });
-    mics.push({ value: 'phone', label: 'Phone microphone', sub: 'Phone', cmd: null });
+    outs = mediaOuts.concat(phoneOuts, callOuts);
+    mics.push({ value: 'phone', label: 'Phone microphone', sub: 'Built in', cmd: null });
     commDevs.forEach(function (d) {
       if (CALL_KINDS[d.kind]) {
-        mics.push({ value: 'comm:' + d.id, label: d.name + ' microphone', sub: prettyKind(d.kind) + ', call quality (also moves the output)', cmd: ['mode headset', 'pin ' + d.id] });
+        mics.push({ value: 'comm:' + d.id, label: d.name + ' microphone', sub: 'Call mode, also moves the output here', cmd: ['mode headset', 'pin ' + d.id] });
       }
     });
     // "pinned" = the device we (or Discord) explicitly set as communication device. The platform's
@@ -699,7 +701,7 @@
       outSel = 'comm:' + pinnedDev.id;
       micSel = (pinnedDev.kind === 'earpiece' || pinnedDev.kind === 'speaker') ? 'phone' : 'comm:' + pinnedDev.id;
     } else {
-      outSel = firstMedia ? firstMedia.value : (ear ? 'comm:' + ear.id : (outs[0] && outs[0].value));
+      outSel = firstMedia ? firstMedia.value : (spk ? 'comm:' + spk.id : (ear ? 'comm:' + ear.id : (outs[0] && outs[0].value)));
       micSel = 'phone';
     }
     return { outs: outs, mics: mics, outSel: outSel, micSel: micSel, comm: comm, firstMedia: firstMedia };
@@ -794,11 +796,22 @@
       function rows(list) {
         return list.map(function (x) { return R.createElement(ui.TableRadioRow, { key: x.value, value: x.value, label: x.label, subLabel: x.sub }); });
       }
+      function section(title, value, list, isMic) {
+        var group = R.createElement(ui.TableRadioGroup, {
+          value: value, hasIcons: false,
+          title: ui.VoicePanelFormSection ? undefined : title,
+          onChange: function (v) { choose(list, v, isMic); }
+        }, rows(list));
+        // Discord's own section wrapper gives the same inset and title style as its other sections.
+        return ui.VoicePanelFormSection
+          ? R.createElement(ui.VoicePanelFormSection, { title: title, hasIcons: false }, group)
+          : group;
+      }
       var shownOut = pending ? pending.out : m.outSel;
       var shownMic = pending ? pending.mic : m.micSel;
       return R.createElement(boundaryFor(R), { orig: orig, props: props }, R.createElement(R.Fragment, null,
-        R.createElement(ui.TableRadioGroup, { title: 'Output', value: shownOut, onChange: function (v) { choose(m.outs, v, false); }, hasIcons: false }, rows(m.outs)),
-        R.createElement(ui.TableRadioGroup, { title: 'Microphone', value: shownMic, onChange: function (v) { choose(m.mics, v, true); }, hasIcons: false }, rows(m.mics))));
+        section('Output', shownOut, m.outs, false),
+        section('Microphone', shownMic, m.mics, true)));
     };
     chooserTypes.push({ orig: orig, comp: comp });
     return comp;
@@ -808,7 +821,7 @@
   vord.ui = {};
   function uiReady() { return !!(vord.ui && vord.ui.TableRadioGroup && vord.ui.TableRadioRow); }
   function captureUi(name, type) {
-    if ((name === 'TableRadioGroup' || name === 'TableRadioRow') && (typeof type === 'function' || typeof type === 'object') && type && !vord.ui[name]) {
+    if ((name === 'TableRadioGroup' || name === 'TableRadioRow' || name === 'VoicePanelFormSection') && (typeof type === 'function' || typeof type === 'object') && type && !vord.ui[name]) {
       vord.ui[name] = type;
       log('audioChooser: captured ' + name + ' from a rendered element');
     }
